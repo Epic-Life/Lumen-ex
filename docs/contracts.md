@@ -27,6 +27,21 @@ without changing the evaluator interface.
 expected processing errors and leak-scan failures into quarantine results. Unexpected
 programming errors are not silently presented as successful processing.
 
+## Identity projection
+
+`PatientIdentity` in `lumen_ex.contracts.identity` contains only identity attributes
+and their `IdentityValue(original, normalized, source_key)` entries. Supported
+attributes are name, date of birth, age, gender, phone, address, location,
+hospital-specific identifier, and government/health identifier. It also records the
+source file and record locator, missing and malformed fields, and normalization
+metadata. Source values and locators are excluded from object representations to reduce
+accidental logging exposure. The projection deliberately does not retain the complete
+medical record.
+
+`lumen_ex.identity.extract_identity` handles one parsed mapping or a labeled note;
+`extract_fhir_identities` returns identities for Patient resources in a FHIR R4
+resource or Bundle. The helpers do not decode files or guess unlabeled names.
+
 ## Stage interfaces
 
 Protocols in `lumen_ex.stages` define the boundaries for ingestion, normalization,
@@ -48,6 +63,8 @@ The governing format is the starter kit's `docs/SPEC.md`, not these internal mod
   `file`, `loc`, and `patient` keys. No new required fields are introduced.
 - Output paths remain relative to the output root; hashes identify inputs without
   exposing source filenames in the report.
+- `PatientIdentity` is an internal extraction contract only. It does not change
+  `NormalizedRecord`, `records.jsonl`, the report schema, or any pseudonym behavior.
 
 The existing starter is still responsible for actual baseline serialization in this
 milestone. The new report serializer is covered as a contract helper and does not alter

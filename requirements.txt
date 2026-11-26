@@ -1,1 +1,2 @@
-# Runtime and tests use only the Python standard library.
+indic-transliteration==2.3.83
+phonenumbers==9.0.44

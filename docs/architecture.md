@@ -30,6 +30,8 @@ limitations; it is not a production-ready firewall.
 | Shared contracts | Hold file metadata, normalized records, typed processing outcomes, linkage decisions, manifest entries, and aggregate reports without depending on format-specific algorithms. |
 | Normalization | Normalize representation while retaining source locators and medical values. `Normalizer.normalize` accepts and returns a `NormalizedRecord`. |
 | PII detection | Produce counts and typed findings without deciding identity. `Detector.detect` returns `DetectionResult`. No detector is implemented in this milestone. |
+| Identity extraction and normalization | `lumen_ex.identity` projects parsed row/object values, FHIR R4 Patient resources, or labeled note fields into a compact `PatientIdentity`. Original values, normalized values, missing/invalid fields, and source locators are retained without copying full records. |
+| Indic name normalization | `lumen_ex.detection.indic_names` normalizes supplied Latin/Devanagari name candidates with ITRANS transliteration, Unicode, punctuation, and a small honorific vocabulary. It preserves initials and token order; name equality is not proof of identity. |
 | Record linkage | Decide LINK, DO_NOT_LINK, or ABSTAIN separately from detection. `Linker.decide` returns `LinkageDecision`. No matcher is implemented. |
 | Privacy transformation | Transform a normalized record using detection and linkage outputs. `PrivacyTransformer.transform` returns `SanitizationResult`. No anonymization is implemented. |
 | Leak scanning / security | Check transformed results before release; unsafe results must not reach output. `LeakScanner.is_safe` is fail-closed in the coordinator. |
@@ -42,6 +44,11 @@ implementations. The coordinator processes records in order, sends only leak-sca
 sanitized results to the writer, reports every result, and then finalizes the report.
 Its stage dependencies are injected, so later milestones can add implementations
 without changing the contracts or creating microservices.
+
+The identity helpers are a foundation API only. They consume already-parsed values:
+CSV/TSV decoding, JSON record iteration, FHIR validation, and filesystem traversal stay
+at the ingestion boundary. Free-text extraction is limited to explicit field labels;
+it is not a general name recognizer and does not perform record linking.
 
 ## Operational constraints
 
