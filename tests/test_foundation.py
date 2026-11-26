@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 from lumen_ex.config import PipelineConfig, load_config
+from lumen_ex.baseline import run_starter
 from lumen_ex.contracts.models import (
     DetectionResult,
     InputFileMetadata,
@@ -21,6 +22,7 @@ from lumen_ex.contracts.models import (
 )
 from lumen_ex.errors import ConfigurationError, ProcessingError
 from lumen_ex.pipeline import Pipeline, PipelineStages
+from lumen_ex.security import SensitiveDataLeakScanner
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,6 +127,8 @@ class PipelineTests(unittest.TestCase):
 
         class LeakScanner:
             def is_safe(self, result):
+                if result.locator == "metadata":
+                    return True
                 return False
 
         quarantined = []
@@ -235,7 +239,7 @@ class PipelineTests(unittest.TestCase):
                 raise AssertionError
 
             def is_safe(self, result):
-                raise AssertionError
+                return True
 
             def write(self, source, result):
                 raise AssertionError
@@ -260,8 +264,79 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(result.error_code, "invalid_record")
         self.assertEqual(result.status, ProcessingStatus.QUARANTINED)
 
+    def test_unexpected_stage_errors_become_scanned_safe_quarantine(self) -> None:
+        scanned = []
+
+        class FailedNormalizer:
+            def normalize(self, record):
+                raise ValueError("SYNTHETIC-CANARY-ALPHA-8427")
+
+        class Scanner:
+            def is_safe(self, result):
+                scanned.append(result)
+                return True
+
+        class Unused:
+            def detect(self, record):
+                raise AssertionError
+
+            def decide(self, record):
+                raise AssertionError
+
+            def transform(self, record, detection, linkage):
+                raise AssertionError
+
+            def write(self, source, result):
+                raise AssertionError
+
+            def record(self, source, result):
+                raise AssertionError
+
+            def finalize(self, report):
+                raise AssertionError
+
+        result = Pipeline(
+            PipelineStages(
+                FailedNormalizer(),
+                Unused(),
+                Unused(),
+                Unused(),
+                Scanner(),
+                Unused(),
+                Unused(),
+            )
+        ).process(_record())
+        self.assertEqual(result.status, ProcessingStatus.QUARANTINED)
+        self.assertEqual(result.error_code, "internal_error")
+        self.assertEqual(len(scanned), 1)
+        self.assertNotIn("SYNTHETIC-CANARY-ALPHA-8427", repr(result))
+
 
 class CliTests(unittest.TestCase):
+    def test_baseline_clears_secret_and_canary_after_run(self) -> None:
+        from starter import main as starter
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_root = root / "input"
+            output_root = root / "output"
+            input_root.mkdir()
+            (input_root / "note.txt").write_text(
+                "Clinical note without identifiers.", encoding="utf-8"
+            )
+            secret = "synthetic-secret-canary-phrase"
+            scanner = SensitiveDataLeakScanner(canaries=(secret,))
+            result = run_starter(
+                input_root,
+                output_root,
+                PipelineConfig(),
+                secret,
+                scanner,
+            )
+            self.assertEqual(result, 0)
+            self.assertEqual(starter.SECRET, b"")
+            self.assertTrue(scanner.scan_text(secret))
+
     def test_cli_executes_starter_and_emits_validator_compatible_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -339,6 +414,61 @@ class CliTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 2)
             self.assertIn("secret_missing", completed.stderr)
             self.assertNotIn(str(input_root), completed.stderr)
+
+    def test_cli_quarantines_structured_pii_before_writing_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_root = root / "input"
+            output_root = root / "output"
+            input_root.mkdir()
+            (input_root / "patients.csv").write_text(
+                "patient_name,medication\nAsha Sharma,Paracetamol 500 mg\n",
+                encoding="utf-8",
+            )
+            environment = dict(
+                os.environ, RAKSHA_SECRET="test-secret", PYTHONIOENCODING="utf-8"
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "main.py"),
+                    "--input",
+                    str(input_root),
+                    "--output",
+                    str(output_root),
+                ],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            report_text = (output_root / "report.json").read_text(encoding="utf-8")
+            report = json.loads(report_text)
+            self.assertEqual(report["files"][0]["status"], "quarantined")
+            self.assertEqual(report["files"][0]["reason"], "leak_scan_failed")
+            self.assertFalse((output_root / "sanitized" / "patients.csv").exists())
+            self.assertNotIn("Asha Sharma", report_text)
+
+            validation = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "validate_output.py"),
+                    "--input",
+                    str(input_root),
+                    "--output",
+                    str(output_root),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                validation.returncode, 0, validation.stdout + validation.stderr
+            )
+            self.assertIn("CONTRACT OK", validation.stdout)
 
 
 def _record() -> ParsedRecord:

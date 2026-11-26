@@ -26,7 +26,6 @@ import hashlib
 import hmac
 import io
 import json
-import os
 import re
 import sys
 import time
@@ -47,7 +46,11 @@ def load_policy(path: Path) -> dict:
 
 HERE = Path(__file__).resolve().parent
 POLICY = load_policy(HERE / "config" / "policy.yaml")
-SECRET = os.environ.get("RAKSHA_SECRET", "").encode()  # never print or write this
+SECRET = b""  # supplied for one run by the root CLI adapter, then cleared
+OUTPUT_LEAK_SCANNER = None
+_SAFE_FILE_REASONS = frozenset(
+    {"unsupported_format", "empty_file", "undecodable_text", "leak_scan_failed"}
+)
 
 
 # --------------------------------------------------------------------------- pseudonyms & dates
@@ -213,6 +216,9 @@ def main() -> int:
     ap.add_argument("--input", required=True)
     ap.add_argument("--output", required=True)
     a = ap.parse_args()
+    scanner = OUTPUT_LEAK_SCANNER
+    if scanner is None:
+        raise RuntimeError("leak_scan_unavailable")
     t0 = time.monotonic()
     inp, out = Path(a.input), Path(a.output)
     san = out / "sanitized"
@@ -225,6 +231,7 @@ def main() -> int:
         raw = path.read_bytes()
         entry = {"input_sha256": hashlib.sha256(raw).hexdigest()}
         ext = path.suffix.lower()
+        record_start = len(records)
         try:
             if ext not in (".csv", ".tsv", ".json", ".txt"):
                 raise ValueError("unsupported_format")
@@ -240,13 +247,22 @@ def main() -> int:
                 result = process_json(text, rel, records)
             else:
                 result = process_text(text, rel, records)
+            if not scanner.scan_artifact_text(
+                result, filename=f"sanitized/{rel}"
+            ) or not scanner.scan_value(records[record_start:]):
+                raise ValueError("leak_scan_failed")
             dest = san / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(result, encoding="utf-8", newline="")
             entry.update(output=f"sanitized/{rel}", status="sanitized")
         except (ValueError, RecursionError, UnicodeError, csv.Error) as exc:
             # Fail safe: never copy what we could not clean. The reason holds no file content.
-            reason = str(exc) if isinstance(exc, ValueError) and str(exc).isidentifier() else type(exc).__name__
+            message = str(exc)
+            reason = (
+                message
+                if isinstance(exc, ValueError) and message in _SAFE_FILE_REASONS
+                else type(exc).__name__
+            )
             entry.update(output=None, status="quarantined", reason=reason)
         files.append(entry)
 
@@ -254,9 +270,12 @@ def main() -> int:
     exported = {e["output"] for e in files if e["output"]}
     records = [r for r in records if r["file"] in exported]
 
-    with open(out / "records.jsonl", "w", encoding="utf-8") as f:
-        for r in records:
-            f.write(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n")
+    records_text = "".join(
+        json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n" for r in records
+    )
+    if not scanner.scan_artifact_text(records_text, filename="records.jsonl"):
+        raise RuntimeError("leak_scan_failed")
+    (out / "records.jsonl").write_text(records_text, encoding="utf-8")
 
     n_san = sum(e["status"] == "sanitized" for e in files)
     report = {
@@ -272,9 +291,18 @@ def main() -> int:
         "timing": {"seconds": round(time.monotonic() - t0, 2)},
         "resources": {"peak_rss_mb": peak_rss_mb()},
     }
-    (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    # Only counts go to stdout: stdout and stderr are scanned for PII.
-    print(f"files {len(files)} sanitized {n_san} quarantined {len(files) - n_san} records {len(records)}")
+    report_text = json.dumps(report, indent=2) + "\n"
+    if not scanner.scan_artifact_text(report_text, filename="report.json"):
+        raise RuntimeError("leak_scan_failed")
+    (out / "report.json").write_text(report_text, encoding="utf-8")
+    # Only counts reach stdout; CLI diagnostics contain safe codes only.
+    summary = (
+        f"files {len(files)} sanitized {n_san} "
+        f"quarantined {len(files) - n_san} records {len(records)}"
+    )
+    if not scanner.scan_text(summary):
+        raise RuntimeError("leak_scan_failed")
+    print(summary)
     return 0
 
 

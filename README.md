@@ -4,8 +4,9 @@ Lumen-ex is an offline, CPU-only, LLM-free healthcare-data privacy firewall proj
 for the Secret Wards hackathon track. The repository includes its submission
 foundation, file-ingestion API, identity helpers, a deterministic PII detector, a
 conservative patient-linkage stage, and a modular cohort-aware privacy transformation
-stage. The submission CLI still uses the starter adapter; the modular privacy stage is
-not yet integrated with output writing or leak scanning.
+stage. The submission CLI retains the starter adapter, now guarded by an offline
+pre-write leak scanner for sanitized files, record metadata, reports, and filenames.
+The modular cohort-aware privacy stage is not yet integrated with submission output.
 
 The official challenge kit is included in this repository. Read [START_HERE.md](START_HERE.md)
 and the official [problem statement](docs/PROBLEM_STATEMENT.md),
@@ -26,10 +27,11 @@ read it, and this foundation does not import it.
 - Preserve clinical values according to the official specification.
 
 These are project requirements, not claims that the current baseline achieves them.
-The shipped submission CLI still uses the starter adapter, which provides basic regex
-replacement and has incomplete handling of hidden PII channels. The modular privacy
-stage requires the caller to supply detector and linkage results and a complete cohort;
-it does not replace the official output writer or leak scanner.
+The shipped submission CLI still uses the starter's basic regex transformation, which
+has incomplete handling of hidden PII channels. The M07 guard uses the existing
+detector to quarantine detected leaks before writing each artifact, but cannot guarantee
+that all PII is detected. The modular privacy stage requires detector and linkage
+results plus a complete cohort; it does not replace the official output writer.
 
 ## Setup
 
@@ -90,11 +92,13 @@ lumen_ex/
   matching.py              bounded candidate retrieval and conservative linkage
   detection/indic_names.py Devanagari-aware candidate name normalization
   detection/pii.py       deterministic multilingual PII detection
+  security/                 pre-write leak scanning and artifact checks
   baseline.py              compatibility adapter for the shipped starter
-starter/                   official starter and policy (preserved)
+starter/                   starter implementation with M07 pre-write guard
 tests/                     foundation, ingestion, identity, detection, linkage, and privacy tests
 docs/architecture.md       responsibilities, boundaries, and data flow
 docs/contracts.md          internal models and official format compatibility
+docs/security.md           key handling, scanning coverage, and limitations
 docs/decisions/            material architecture decisions
 validate_output.py         official output format validator (unchanged)
 check_dev.py               official practice self-check (unchanged)

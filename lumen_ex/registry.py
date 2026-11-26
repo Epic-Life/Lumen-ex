@@ -63,6 +63,8 @@ class EncryptedIdentityRegistry:
         cls, secret: str | bytes, parent_dir: Path | None = None
     ) -> "EncryptedIdentityRegistry":
         """Create an encrypted registry in a private directory removed on close."""
+        if not isinstance(secret, (str, bytes)):
+            raise ProcessingError("registry_secret_missing")
         secret_bytes = secret.encode("utf-8") if isinstance(secret, str) else secret
         if not secret_bytes:
             raise ProcessingError("registry_secret_missing")
@@ -451,12 +453,19 @@ class EncryptedIdentityRegistry:
         if self._closed:
             return
         try:
-            self._connection.close()
+            try:
+                self._connection.close()
+            except sqlite3.Error:
+                raise ProcessingError("registry_storage_error") from None
         finally:
             self._encryption_key = b""
             self._index_key = b""
-            self._temporary_directory.cleanup()
-            self._closed = True
+            try:
+                self._temporary_directory.cleanup()
+            except OSError:
+                raise ProcessingError("registry_storage_error") from None
+            finally:
+                self._closed = True
 
     def _connect(self, database_path: Path) -> sqlite3.Connection:
         connection: sqlite3.Connection | None = None

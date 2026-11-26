@@ -8,6 +8,7 @@ from pathlib import Path
 from lumen_ex.baseline import run_starter
 from lumen_ex.config import load_config
 from lumen_ex.errors import LumenError
+from lumen_ex.security import SensitiveDataLeakScanner
 
 
 _LOGGER = logging.getLogger("lumen_ex")
@@ -40,13 +41,22 @@ def main(argv: list[str] | None = None) -> int:
         output_root = args.output.resolve()
         if not input_root.is_dir() or _paths_overlap(input_root, output_root):
             raise LumenError("input_output_path_invalid")
-        if not os.environ.get("RAKSHA_SECRET"):
+        secret = os.environ.get("RAKSHA_SECRET")
+        if not secret:
             raise LumenError("secret_missing")
-        result = run_starter(input_root, output_root, config)
-        return result
+        leak_scanner = SensitiveDataLeakScanner(canaries=(secret,))
+        try:
+            return run_starter(
+                input_root, output_root, config, secret, leak_scanner
+            )
+        finally:
+            leak_scanner.clear_canaries()
     except LumenError as error:
         _LOGGER.error("Processing stopped: %s", error.code)
         return 2
     except OSError:
         _LOGGER.error("Processing stopped: filesystem_error")
+        return 2
+    except Exception:
+        _LOGGER.error("Processing stopped: internal_error")
         return 2

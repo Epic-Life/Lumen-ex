@@ -39,8 +39,9 @@ without changing the evaluator interface.
   optional entity counts.
 
 `ProcessingError` carries a safe code, not source content. The coordinator converts
-expected processing errors and leak-scan failures into quarantine results. Unexpected
-programming errors are not silently presented as successful processing.
+expected processing errors, unexpected stage failures, and leak-scan failures into
+quarantine results. Errors at output/report boundaries become a safe `internal_error`
+or `leak_scan_failed`, never raw exception text.
 
 ## Identity projection
 
@@ -82,8 +83,8 @@ These are interface contracts; ingestion, identity normalization, deterministic 
 detection, linkage, and privacy transformation have modular implementations.
 `MultilingualPIIDetector` returns findings for structured values,
 free-text mentions, JSON keys, CSV headers, and filenames without modifying the record.
-The detector is available for injection through `PipelineStages` but is not wired into
-the production CLI. The M06 `PrivacyTransformer` exposes a singleton stage adapter
+The production starter adapter reuses it through `SensitiveDataLeakScanner` before
+writing sanitized outputs and metadata. The M06 `PrivacyTransformer` exposes a singleton stage adapter
 and a cohort-aware `transform_batch` API; the record-at-a-time coordinator does not
 yet provide the cohort integration needed to use it for release. The coordinator exposes `Pipeline.ingest_directory`
 and receives normalization, detection, linkage, transformation, leak-scanning,
@@ -105,6 +106,6 @@ The governing format is the starter kit's `docs/SPEC.md`, not these internal mod
 - `PatientIdentity` and its `NormalizedRecord` projections are internal contracts only.
   They do not change `records.jsonl`, the report schema, or any pseudonym behavior.
 
-The existing starter is still responsible for actual baseline serialization in this
-milestone. The new report serializer is covered as a contract helper and does not alter
-the validator or claim that the future exporter is implemented.
+The existing starter is still responsible for baseline serialization. The M07 scanner
+does not alter the validator or official output shapes; see [security boundaries and
+limitations](security.md).

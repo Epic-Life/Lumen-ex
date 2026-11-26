@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -8,6 +9,7 @@ from lumen_ex.contracts.identity import (
     PatientIdentity,
 )
 from lumen_ex.errors import ProcessingError
+from lumen_ex.security import SensitiveDataLeakScanner
 from lumen_ex.registry import EncryptedIdentityRegistry
 
 
@@ -125,8 +127,39 @@ class EncryptedIdentityRegistryTests(unittest.TestCase):
                 _SECRET,
             ):
                 self.assertNotIn(value, stored_bytes)
+            scanner = SensitiveDataLeakScanner(
+                canaries=(
+                    "Sensitive Sample Name",
+                    "+919876543210",
+                    _SECRET.decode("utf-8"),
+                )
+            )
+            self.assertTrue(scanner.scan_path(database_path))
+            scanner.clear_canaries()
+            if os.name != "nt":
+                self.assertEqual(directory.stat().st_mode & 0o077, 0)
 
         self.assertFalse(directory.exists())
+
+    def test_authenticated_encryption_uses_fresh_nonces_and_rejects_tampering(self) -> None:
+        with EncryptedIdentityRegistry.temporary(
+            _SECRET, Path(self.parent.name)
+        ) as registry:
+            plaintext = b'"synthetic authenticated value"'
+            associated_data = b"identity-value"
+            first = registry._encrypt(plaintext, associated_data)
+            second = registry._encrypt(plaintext, associated_data)
+            self.assertNotEqual(first[:12], second[:12])
+            self.assertEqual(
+                registry._decrypt_json(first, associated_data),
+                "synthetic authenticated value",
+            )
+
+            tampered = first[:-1] + bytes((first[-1] ^ 1,))
+            with self.assertRaises(ProcessingError) as invalid:
+                registry._decrypt_json(tampered, associated_data)
+            self.assertEqual(invalid.exception.code, "registry_data_invalid")
+            self.assertNotIn("synthetic authenticated value", str(invalid.exception))
 
     def test_internal_patient_ids_are_repeatable_for_the_same_secret_and_record(self) -> None:
         first = EncryptedIdentityRegistry.temporary(_SECRET, Path(self.parent.name))

@@ -51,15 +51,18 @@ class Pipeline:
             detection: DetectionResult = self._stages.detector.detect(normalized)
             linkage = self._stages.linker.decide(normalized)
             result = self._stages.privacy.transform(normalized, detection, linkage)
-            if not self._stages.leak_scanner.is_safe(result):
-                raise ProcessingError("leak_scan_failed")
-            return result
         except ProcessingError as error:
-            return SanitizationResult(
-                status=ProcessingStatus.QUARANTINED,
-                locator=record.locator,
-                error_code=error.code,
-            )
+            result = self._quarantine(record, error.code)
+        except Exception:
+            result = self._quarantine(record, "internal_error")
+
+        try:
+            is_safe = self._stages.leak_scanner.is_safe(result)
+        except Exception:
+            return self._quarantine(record, "internal_error")
+        if not is_safe:
+            return self._quarantine(record, "leak_scan_failed")
+        return result
 
     def run(self, records: Iterable[ParsedRecord]) -> None:
         """Normalize and process records in order, then finalize reporting."""
@@ -67,9 +70,44 @@ class Pipeline:
         for record in records:
             result = self.process(record)
             if result.status is ProcessingStatus.SANITIZED:
-                self._stages.output_writer.write(record.source, result)
-            manifest.append(self._stages.reporter.record(record.source, result))
-        self._stages.reporter.finalize(PipelineReport(files=tuple(manifest)))
+                try:
+                    self._stages.output_writer.write(record.source, result)
+                except Exception:
+                    raise ProcessingError("internal_error") from None
+            try:
+                entry = self._stages.reporter.record(record.source, result)
+            except Exception:
+                raise ProcessingError("internal_error") from None
+            if not self._is_safe_metadata(entry.to_official_dict()):
+                raise ProcessingError("leak_scan_failed")
+            manifest.append(entry)
+
+        report = PipelineReport(files=tuple(manifest))
+        if not self._is_safe_metadata(report.to_official_dict()):
+            raise ProcessingError("leak_scan_failed")
+        try:
+            self._stages.reporter.finalize(report)
+        except Exception:
+            raise ProcessingError("internal_error") from None
+
+    def _is_safe_metadata(self, value: object) -> bool:
+        candidate = SanitizationResult(
+            status=ProcessingStatus.SANITIZED,
+            locator="metadata",
+            output_fields={"metadata": value},
+        )
+        try:
+            return self._stages.leak_scanner.is_safe(candidate)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _quarantine(record: ParsedRecord, error_code: str) -> SanitizationResult:
+        return SanitizationResult(
+            status=ProcessingStatus.QUARANTINED,
+            locator=record.locator,
+            error_code=error_code,
+        )
 
     def ingest_directory(
         self, input_root: Path, ingestor: Ingestor | None = None

@@ -13,6 +13,7 @@ SAFE_ERROR_CODES = frozenset(
         "filesystem_error",
         "invalid_record",
         "leak_scan_failed",
+        "internal_error",
         "unsupported_format",
         "unsupported_file_type",
         "unsafe_symlink",
