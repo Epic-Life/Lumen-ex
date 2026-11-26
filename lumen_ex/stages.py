@@ -1,7 +1,7 @@
 """Stage interfaces; implementations are intentionally deferred to later milestones."""
 
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Iterable, Iterator, Protocol
 
 from lumen_ex.contracts.models import (
     DetectionResult,
@@ -16,9 +16,9 @@ from lumen_ex.contracts.models import (
 
 
 class Ingestor(Protocol):
-    def discover(self, input_root: Path) -> Sequence[InputFileMetadata]: ...
+    def discover(self, input_root: Path) -> Iterable[InputFileMetadata]: ...
 
-    def read(self, source: InputFileMetadata) -> Sequence[ParsedRecord]: ...
+    def read(self, source: InputFileMetadata) -> Iterator[ParsedRecord]: ...
 
 
 class Normalizer(Protocol):

@@ -1,6 +1,20 @@
 """Compact identity data contracts for future candidate-retrieval stages."""
 
 from dataclasses import dataclass, field
+from enum import Enum
+
+
+class IdentityDecision(str, Enum):
+    LINK = "LINK"
+    CREATE = "CREATE"
+    UNRESOLVED = "UNRESOLVED"
+
+
+@dataclass(frozen=True)
+class RegistryRecordMapping:
+    patient_id: str | None
+    decision: IdentityDecision
+    confidence: float
 
 
 @dataclass(frozen=True)
@@ -32,4 +46,9 @@ class PatientIdentity:
     normalization_metadata: tuple[tuple[str, str], ...] = ()
 
 
-__all__ = ["IdentityValue", "PatientIdentity"]
+__all__ = [
+    "IdentityDecision",
+    "IdentityValue",
+    "PatientIdentity",
+    "RegistryRecordMapping",
+]

@@ -1,2 +1,4 @@
 indic-transliteration==2.3.83
 phonenumbers==9.0.44
+ijson==3.4.0.post0
+cryptography==46.0.6
