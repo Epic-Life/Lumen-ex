@@ -5,7 +5,7 @@ import logging
 import os
 from pathlib import Path
 
-from lumen_ex.baseline import run_starter
+from lumen_ex.baseline import run_sanitizer
 from lumen_ex.config import load_config
 from lumen_ex.errors import LumenError
 
@@ -42,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
             raise LumenError("input_output_path_invalid")
         if not os.environ.get("RAKSHA_SECRET"):
             raise LumenError("secret_missing")
-        result = run_starter(input_root, output_root, config)
+        result = run_sanitizer(input_root, output_root, config)
         return result
     except LumenError as error:
         _LOGGER.error("Processing stopped: %s", error.code)

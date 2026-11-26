@@ -112,22 +112,27 @@ class Stats:
     suppressed = 0
 
 
-def clean_text(text: str) -> str:
+def clean_text(text: str, text_detector=None) -> str:
     """Replace detected identifiers with typed placeholders. TODO(team): much more than regex."""
+    if text_detector is not None:
+        text, count = text_detector(text)
+        Stats.identifiers += count
     for kind, rx in PATTERNS:
+        if kind == "NAME" and text_detector is not None:
+            continue
         text, n = rx.subn(f"[{kind}]" if kind != "NAME" else " [NAME]", text)
         Stats.identifiers += n
     return text
 
 
-def clean_value(v):
+def clean_value(v, text_detector=None):
     if isinstance(v, str):
-        return clean_text(v)
+        return clean_text(v, text_detector)
     if isinstance(v, list):
-        return [clean_value(x) for x in v]
+        return [clean_value(x, text_detector) for x in v]
     if isinstance(v, dict):
         # JSON keys can be PII too (for example a dict keyed by patient name)
-        return {clean_text(k): clean_value(x) for k, x in v.items()}
+        return {clean_text(k, text_detector): clean_value(x, text_detector) for k, x in v.items()}
     return v  # numbers, booleans, null keep their type
 
 
@@ -156,26 +161,38 @@ def decode(raw: bytes) -> str | None:
     return None
 
 
-def process_csv(text: str, delimiter: str, rel: str, records: list) -> str:
-    rows = list(csv.reader(io.StringIO(text, newline=""), delimiter=delimiter))
+def process_csv(
+    text: str, delimiter: str, rel: str, records: list, text_detector=None, private_column=None,
+) -> str:
+    rows = list(csv.reader(io.StringIO(text, newline=""), delimiter=delimiter, strict=True))
     if not rows:
         return ""
     header, body = rows[0], rows[1:]
+    if not header or any(len(row) != len(header) for row in body):
+        raise ValueError("invalid_csv_row_width")
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=delimiter, lineterminator="\n")
     w.writerow(header)  # TODO(team): rename a header only if it contains PII
+    private_fields = [bool(private_column and private_column(column)) for column in header]
     for i, row in enumerate(body):
         key = link_records(delimiter.join(row))
         pid = pseudonym(key) if key else None
         # TODO(team): write pid into the row's patient column so it appears INSIDE the record
-        w.writerow([clean_text(c) for c in row])
+        cleaned = []
+        for cell, is_private in zip(row, private_fields):
+            if cell.strip() and is_private:
+                cleaned.append("[REDACTED]")
+                Stats.identifiers += 1
+            else:
+                cleaned.append(clean_text(cell, text_detector))
+        w.writerow(cleaned)
         records.append({"file": f"sanitized/{rel}", "loc": f"row:{i}", "patient": pid})
         Stats.records += 1
         Stats.linked += pid is not None
     return buf.getvalue()
 
 
-def process_json(text: str, rel: str, records: list) -> str:
+def process_json(text: str, rel: str, records: list, text_detector=None) -> str:
     data = json.loads(text)
     is_doc = not isinstance(data, dict) or data.get("resourceType") == "Bundle" or not any(
         isinstance(v, list) and v and all(isinstance(x, dict) for x in v) for v in data.values())
@@ -190,13 +207,13 @@ def process_json(text: str, rel: str, records: list) -> str:
                     records.append({"file": f"sanitized/{rel}", "loc": f"/{pointer_key}/{i}", "patient": None})
                     Stats.records += 1
     # TODO(team): FHIR must stay a valid R4 Bundle whose references resolve
-    return json.dumps(clean_value(data), ensure_ascii=False, indent=2) + "\n"
+    return json.dumps(clean_value(data, text_detector), ensure_ascii=False, indent=2) + "\n"
 
 
-def process_text(text: str, rel: str, records: list) -> str:
+def process_text(text: str, rel: str, records: list, text_detector=None) -> str:
     records.append({"file": f"sanitized/{rel}", "loc": "doc", "patient": None})
     Stats.records += 1
-    return clean_text(text)
+    return clean_text(text, text_detector)
 
 
 def peak_rss_mb() -> float:
@@ -213,8 +230,11 @@ def main() -> int:
     ap.add_argument("--input", required=True)
     ap.add_argument("--output", required=True)
     a = ap.parse_args()
+    return run(Path(a.input), Path(a.output))
+
+
+def run(inp: Path, out: Path, *, text_detector=None, private_column=None) -> int:
     t0 = time.monotonic()
-    inp, out = Path(a.input), Path(a.output)
     san = out / "sanitized"
     san.mkdir(parents=True, exist_ok=True)
     files, records = [], []
@@ -235,11 +255,11 @@ def main() -> int:
                 raise ValueError("undecodable_text")
             # TODO(team): a file NAME can contain PII: rename it and report the new path
             if ext in (".csv", ".tsv"):
-                result = process_csv(text, "\t" if ext == ".tsv" else ",", rel, records)
+                result = process_csv(text, "\t" if ext == ".tsv" else ",", rel, records, text_detector, private_column)
             elif ext == ".json":
-                result = process_json(text, rel, records)
+                result = process_json(text, rel, records, text_detector)
             else:
-                result = process_text(text, rel, records)
+                result = process_text(text, rel, records, text_detector)
             dest = san / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(result, encoding="utf-8", newline="")
