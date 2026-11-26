@@ -2,10 +2,10 @@
 
 Lumen-ex is an offline, CPU-only, LLM-free healthcare-data privacy firewall project
 for the Secret Wards hackathon track. The repository includes its submission
-foundation, file-ingestion API, identity helpers, a deterministic PII detector, and a
-conservative patient-linkage stage; the submission CLI still uses the starter adapter.
-The project does **not** yet implement an integrated privacy firewall, PII
-transformation, anonymization, or privacy scoring.
+foundation, file-ingestion API, identity helpers, a deterministic PII detector, a
+conservative patient-linkage stage, and a modular cohort-aware privacy transformation
+stage. The submission CLI still uses the starter adapter; the modular privacy stage is
+not yet integrated with output writing or leak scanning.
 
 The official challenge kit is included in this repository. Read [START_HERE.md](START_HERE.md)
 and the official [problem statement](docs/PROBLEM_STATEMENT.md),
@@ -27,9 +27,9 @@ read it, and this foundation does not import it.
 
 These are project requirements, not claims that the current baseline achieves them.
 The shipped submission CLI still uses the starter adapter, which provides basic regex
-replacement and has incomplete handling of hidden PII channels. The modular
-`MultilingualPIIDetector` reports typed, offset-bearing findings but does not modify
-records and is not wired into the official CLI output path.
+replacement and has incomplete handling of hidden PII channels. The modular privacy
+stage requires the caller to supply detector and linkage results and a complete cohort;
+it does not replace the official output writer or leak scanner.
 
 ## Setup
 
@@ -82,6 +82,8 @@ lumen_ex/
   stages.py                future module interfaces
   contracts/models.py      pipeline data contracts
   contracts/identity.py    compact identity projection contracts
+  privacy/                 keyed pseudonyms, dates, generalization, risk, and transforms
+  value_normalization.py   low-level age/date normalizers shared without package cycles
   ingestion.py             deterministic discovery, quarantine outcomes, and readers
   identity.py              identity extraction and field normalization
   registry.py              encrypted per-run registry and guarded cluster aliases
@@ -90,7 +92,7 @@ lumen_ex/
   detection/pii.py       deterministic multilingual PII detection
   baseline.py              compatibility adapter for the shipped starter
 starter/                   official starter and policy (preserved)
-tests/                     foundation, ingestion, identity, detection, and linkage tests
+tests/                     foundation, ingestion, identity, detection, linkage, and privacy tests
 docs/architecture.md       responsibilities, boundaries, and data flow
 docs/contracts.md          internal models and official format compatibility
 docs/decisions/            material architecture decisions

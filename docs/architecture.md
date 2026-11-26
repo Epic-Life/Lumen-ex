@@ -1,4 +1,4 @@
-# Lumen-ex architecture (foundation through detection)
+# Lumen-ex architecture (through privacy transformation)
 
 Lumen-ex is a single-process Python application. It runs locally, offline, on CPU;
 there are no services, model downloads, or runtime network dependencies. The root
@@ -15,12 +15,12 @@ raksha.toml → main.py / CLI → validated policy
 Modular processing flow:
 Pipeline.ingest_directory → per-file ingestion outcomes → parsed records
 Parsed records → normalization → PII detection → record linkage
-                → privacy transformation → leak scan → output writer → report
+                → cohort privacy transformation → leak scan → output writer → report
 ```
 
-PII detection now has a deterministic implementation; record linkage and later privacy
-stages remain extension points. The detection engine is not wired into the production
-CLI or an output transformation in this milestone.
+PII detection, record linkage, and the M06 privacy transformation have modular
+implementations. The privacy stage is not wired into the production CLI, batch
+orchestration, leak scanner, or output writer.
 The current adapter preserves the shipped starter's basic behavior and its known
 limitations; it is not a production-ready firewall.
 
@@ -37,7 +37,7 @@ limitations; it is not a production-ready firewall.
 | Identity registry storage | `lumen_ex.registry.EncryptedIdentityRegistry` stores encrypted evidence in one per-run SQLite database and keyed block indexes for candidate retrieval. It is shared across batches, removes its private database directory on close, and refuses cluster merges with transitive same-hospital identifier conflicts. |
 | Indic name normalization | `lumen_ex.detection.indic_names` normalizes supplied Latin/Devanagari name candidates with ITRANS transliteration, Unicode, punctuation, a small honorific vocabulary, and a limited set of common Mohammad spelling variants. It preserves initials and token order; name equality is not proof of identity. |
 | Candidate matching | `lumen_ex.matching.IdentityMatcher` retrieves a bounded set of indexed candidates and applies deterministic evidence rules. A unique strong identifier, or a name plus DOB, relative name, or village and age (within one year), can support a link; names alone cannot. Ambiguous or conflicting evidence stays unresolved. `IdentityLinker` adapts results to the pipeline's LINK/DO_NOT_LINK/ABSTAIN contract. Registry cluster aliases are merged only when same-hospital identifier conflicts are absent across both transitive families. |
-| Privacy transformation | Transform a normalized record using detection and linkage outputs. `PrivacyTransformer.transform` returns `SanitizationResult`. No anonymization is implemented. |
+| Privacy transformation | `lumen_ex.privacy.PrivacyTransformer` applies keyed pseudonyms only for LINK decisions, per-patient date shifts, truthful age bands, conservative home-location generalization, finding-based identifier redaction, and cohort quasi-identifier assessment. `transform_batch` is the release-capable API; its outputs can be sanitized, suppressed, or quarantined. |
 | Leak scanning / security | Check transformed results before release; unsafe results must not reach output. `LeakScanner.is_safe` is fail-closed in the coordinator. |
 | Output writing | Serialize approved results while preserving the official output contract. `OutputWriter` is the format-specific boundary. |
 | Reporting | Aggregate safe counts, hashes, durations, and resource metrics. `Reporter` must not include source names, record values, or exception text. |
@@ -48,6 +48,37 @@ implementations. The coordinator processes records in order, sends only leak-sca
 sanitized results to the writer, reports every result, and then finalizes the report.
 Its stage dependencies are injected, so later milestones can add implementations
 without changing the contracts or creating microservices.
+
+The M06 transformer requires cohort context to make its minimum-group-size decision.
+Its `transform` adapter processes a singleton and therefore fails closed by suppressing
+it when the configured minimum cannot be met. `transform_batch` generalizes the cohort,
+measures equivalence classes and rare values, suppresses permitted quasi-identifiers
+cohort-wide, then suppresses any remaining record whose group is still below the
+configured minimum. The existing `Pipeline.run` is still record-at-a-time, so a future
+integration must provide cohort-aware orchestration before the modular transformer can
+be used as a submission path.
+
+## M06 transformation details
+
+The privacy package shares purpose-separated HKDF key derivation with the encrypted
+registry. Pseudonyms and date shifts use distinct derived keys and HMAC domain tags;
+unlinked/abstained records receive no patient pseudonym and use a record-local date
+shift reference instead. Dates are shifted by one deterministic offset per patient or
+unresolved record, preserving time intervals. Ambiguous or malformed date-like values
+fail closed rather than being silently emitted unchanged.
+
+Age bands use the configured width below 85 and an open `85+` band above it. Residence
+location follows the configured village → tehsil → district → state hierarchy, drops
+street-level fields, and retains hospital/facility locations. Clinical fields (including
+diagnoses, medications, doses, frequencies, vitals, labs, procedures, and stay
+intervals) are checked for preservation. Rare clinical values are never individually
+rewritten; if the configured risk threshold cannot be met through permitted QI
+suppression, the record is explicitly suppressed.
+
+Risk figures are cohort-specific estimates over recognized quasi-identifier fields,
+not a security guarantee or a formal guarantee against linkage. The transformer does
+not implement output serialization, leak scanning, cryptographic erasure, or the
+submission CLI integration.
 
 The identity helpers consume parsed values from the ingestion boundary. JSON discovery
 selects root arrays and arrays under common collection keys; otherwise a JSON document

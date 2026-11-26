@@ -1,0 +1,124 @@
+"""Patient-specific deterministic date shifting."""
+
+from datetime import date, datetime, timedelta
+import hashlib
+import hmac
+import re
+
+from lumen_ex.errors import ProcessingError
+from lumen_ex.key_derivation import derive_key
+from lumen_ex.value_normalization import normalize_date
+
+
+_DATE_TOKEN = re.compile(
+    r"(?<!\d)(?:"
+    r"\d{4}-\d{2}-\d{2}(?:[T ][0-9]{2}:[0-9]{2}"
+    r"(?::[0-9]{2}(?:\.\d+)?)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)?"
+    r"|\d{1,2}[./-]\d{1,2}[./-]\d{4}"
+    r")(?!\d)"
+)
+_ISO_DATETIME = re.compile(r"^\d{4}-\d{2}-\d{2}[T ].+")
+
+
+class DateShifter:
+    def __init__(self, secret: str | bytes, max_days: int = 180) -> None:
+        if not isinstance(secret, (str, bytes)) or not secret:
+            raise ProcessingError("secret_missing")
+        if isinstance(max_days, bool) or not isinstance(max_days, int) or max_days < 1:
+            raise ProcessingError("privacy_policy_invalid")
+        self._key = derive_key(secret, b"patient-date-shift")
+        self.max_days = max_days
+
+    def offset_for(self, patient_reference: str) -> int:
+        if not isinstance(patient_reference, str) or not patient_reference:
+            raise ProcessingError("privacy_patient_reference_invalid")
+        digest = hmac.new(
+            self._key,
+            b"lumen-ex/date-shift/v1\0" + patient_reference.encode("utf-8"),
+            hashlib.sha256,
+        ).digest()
+        magnitude = 1 + (int.from_bytes(digest[:8], "big") % self.max_days)
+        direction = -1 if digest[8] & 1 else 1
+        return direction * magnitude
+
+    def shift(self, value: date | datetime, patient_reference: str) -> date | datetime:
+        offset = self.offset_for(patient_reference)
+        try:
+            return value + timedelta(days=offset)
+        except OverflowError:
+            raise ProcessingError("privacy_date_out_of_range") from None
+
+    def shift_text(self, text: str, patient_reference: str) -> str:
+        offset = self.offset_for(patient_reference)
+
+        def replace(match: re.Match[str]) -> str:
+            token = match.group(0)
+            if _ISO_DATETIME.fullmatch(token):
+                return _shift_datetime_token(token, offset)
+            normalized = normalize_date(token)
+            if normalized is None:
+                if _is_ambiguous_date(token):
+                    raise ProcessingError("privacy_date_format_ambiguous")
+                raise ProcessingError("privacy_date_invalid")
+            shifted = _shift_date(date.fromisoformat(normalized), offset)
+            return _format_date_token(token, shifted)
+
+        return _DATE_TOKEN.sub(replace, text)
+
+
+def _shift_date(value: date, offset: int) -> date:
+    try:
+        return value + timedelta(days=offset)
+    except OverflowError:
+        raise ProcessingError("privacy_date_out_of_range") from None
+
+
+def _shift_datetime_token(token: str, offset: int) -> str:
+    source = token.replace("Z", "+00:00")
+    try:
+        value = datetime.fromisoformat(source)
+    except ValueError:
+        raise ProcessingError("privacy_date_invalid") from None
+    try:
+        shifted = value + timedelta(days=offset)
+    except OverflowError:
+        raise ProcessingError("privacy_date_out_of_range") from None
+    result = shifted.isoformat()
+    if token.endswith("Z") and result.endswith("+00:00"):
+        result = result[:-6] + "Z"
+    return result
+
+
+def _is_ambiguous_date(token: str) -> bool:
+    parts = re.split(r"[./-]", token)
+    if len(parts) != 3 or len(parts[2]) != 4:
+        return False
+    try:
+        first, second, year = (int(part) for part in parts)
+        if not (1 <= first <= 12 and 1 <= second <= 12):
+            return False
+        date(year, first, second)
+        date(year, second, first)
+    except ValueError:
+        return False
+    return first != second
+
+
+def _format_date_token(token: str, value: date) -> str:
+    if token[4:5] == "-" and len(token) == 10:
+        return value.isoformat()
+    if "/" in token:
+        first, _, _ = token.split("/")
+        if len(first) == 4:
+            return f"{value.year:04d}/{value.month:02d}/{value.day:02d}"
+        if int(first) > 12:
+            return value.strftime("%d/%m/%Y")
+        return value.strftime("%m/%d/%Y")
+    if "." in token:
+        return value.strftime("%d.%m.%Y")
+    first = token.split("-", 1)[0]
+    if len(first) == 4:
+        return value.strftime("%Y-%m-%d")
+    if int(first) > 12:
+        return value.strftime("%d-%m-%Y")
+    return value.strftime("%m-%d-%Y")

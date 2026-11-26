@@ -21,6 +21,7 @@ from lumen_ex.contracts.models import (
 )
 from lumen_ex.detection.indic_names import normalize_name, transliterate_to_latin
 from lumen_ex.errors import ProcessingError
+from lumen_ex.value_normalization import normalize_age, normalize_date
 
 
 _FIELD_NAMES = (
@@ -40,11 +41,6 @@ _FIELD_NAMES = (
 _MAX_DEPTH = 24
 _MISSING_WORDS = {"", "n/a", "na", "nil", "none", "null", "unknown", "-", "--"}
 _WORD_SEPARATORS = re.compile(r"[^\w]+", re.UNICODE)
-_AGE = re.compile(
-    r"^\s*(\d{1,3})(?:\s*(?:years?|yrs?|y|saal|sal|varsh|वर्ष|साल))?"
-    r"(?:\s*/\s*[mfx])?\s*$",
-    re.IGNORECASE,
-)
 _RELATIVE_NAME = re.compile(
     r"(?i)\b(?P<marker>s\s*/\s*o|d\s*/\s*o|w\s*/\s*o|c\s*/\s*o)"
     r"\s*[:=\-]?\s*(?P<name>[^,;\r\n]+)"
@@ -78,15 +74,6 @@ _EMAIL = re.compile(
 )
 _PHONE_PUNCTUATION = frozenset(" +-()./")
 _ID_PUNCTUATION = re.compile(r"[\s./-]+")
-_DATE_FORMATS = (
-    "%Y-%m-%d",
-    "%Y/%m/%d",
-    "%d/%m/%Y",
-    "%d-%m-%Y",
-    "%d.%m.%Y",
-    "%m/%d/%Y",
-    "%m-%d-%Y",
-)
 _ALIASES: dict[str, frozenset[str]] = {
     "name": frozenset(
         {
@@ -375,48 +362,6 @@ def normalize_phone(value: str) -> str | None:
     if parsed.country_code != 91 or not phonenumbers.is_valid_number(parsed):
         return None
     return phonenumbers.format_number(parsed, PhoneNumberFormat.E164)
-
-
-def normalize_date(value: str | date | datetime) -> str | None:
-    """Return a calendar date as ISO, refusing ambiguous numeric dates."""
-    if isinstance(value, datetime):
-        return value.date().isoformat()
-    if isinstance(value, date):
-        return value.isoformat()
-
-    text = _ascii_digits(unicodedata.normalize("NFKC", value).strip())
-    if not text:
-        return None
-    try:
-        return date.fromisoformat(text).isoformat()
-    except ValueError:
-        pass
-
-    for date_format in _DATE_FORMATS:
-        try:
-            parsed = datetime.strptime(text, date_format).date()
-        except ValueError:
-            continue
-        if date_format in {"%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"}:
-            first, second = _date_components(text, date_format)
-            if first <= 12 and second <= 12:
-                return None
-        elif date_format in {"%m/%d/%Y", "%m-%d-%Y"}:
-            first, second = _date_components(text, date_format)
-            if first <= 12 and second <= 12:
-                return None
-        return parsed.isoformat()
-    return None
-
-
-def normalize_age(value: str | int | float) -> str | None:
-    """Return a plausible age in whole years as a canonical decimal string."""
-    text = unicodedata.normalize("NFKC", str(value)).strip()
-    match = _AGE.fullmatch(text)
-    if match is None:
-        return None
-    age = int(match.group(1))
-    return str(age) if age <= 125 else None
 
 
 def normalize_gender(value: str) -> str | None:
@@ -945,12 +890,6 @@ def _as_mappings(value: object) -> list[Mapping[str, object]]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, Mapping)]
     return []
-
-
-def _date_components(value: str, date_format: str) -> tuple[int, int]:
-    separator = "/" if "/" in date_format else "-" if "-" in date_format else "."
-    first, second, _ = value.split(separator)
-    return int(first), int(second)
 
 
 __all__ = [

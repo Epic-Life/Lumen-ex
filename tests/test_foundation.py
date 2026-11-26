@@ -36,7 +36,12 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(load_config(path), PipelineConfig(age_band_years=10))
 
     def test_rejects_invalid_policy_values_and_keys(self) -> None:
-        for content in ("age_band_years: 0\n", "unexpected: 2\n", "min_group_size: nope\n"):
+        for content in (
+            "age_band_years: 0\n",
+            "unexpected: 2\n",
+            "min_group_size: nope\n",
+            "location_hierarchy: village,state,district\n",
+        ):
             with self.subTest(content=content), tempfile.TemporaryDirectory() as temporary:
                 path = Path(temporary) / "policy.yaml"
                 path.write_text(content, encoding="utf-8")

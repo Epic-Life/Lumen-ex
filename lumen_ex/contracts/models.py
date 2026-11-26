@@ -195,6 +195,10 @@ class NormalizedRecord:
     identities: tuple[PatientIdentity, ...] = field(default=(), repr=False)
     structure: dict[str, object] = field(default_factory=dict, repr=False)
 
+    @property
+    def record_id(self) -> str:
+        return f"{self.source.source_id}:{self.locator}"
+
 
 @dataclass(frozen=True)
 class DetectionFinding:
@@ -246,12 +250,16 @@ class LinkageDecision:
 @dataclass(frozen=True)
 class SanitizationResult:
     status: ProcessingStatus
-    locator: str
+    locator: str = field(repr=False)
     output_fields: dict[str, object] = field(default_factory=dict, repr=False)
     error_code: str | None = None
     identifiers_detected: int = 0
     generalized: bool = False
     suppressed: bool = False
+    output_structure: dict[str, object] = field(default_factory=dict, repr=False)
+    output_relative_path: str | None = field(default=None, repr=False)
+    patient_pseudonym: str | None = field(default=None, repr=False)
+    risk_assessment: "PrivacyRiskAssessment | None" = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.identifiers_detected < 0:
@@ -262,6 +270,46 @@ class SanitizationResult:
             raise ValueError("error_code_invalid")
         if self.status is not ProcessingStatus.QUARANTINED and self.error_code is not None:
             raise ValueError("error_code_status_invalid")
+        if self.output_relative_path is not None and (
+            not _safe_relative_path(self.output_relative_path)
+            or not self.output_relative_path.startswith("sanitized/")
+        ):
+            raise ValueError("sanitization_output_path_invalid")
+        if self.patient_pseudonym is not None and not re.fullmatch(
+            r"PSN-[A-Z0-9]+", self.patient_pseudonym
+        ):
+            raise ValueError("sanitization_pseudonym_invalid")
+
+
+@dataclass(frozen=True)
+class PrivacyRiskAssessment:
+    records_assessed: int
+    equivalence_classes: int
+    unique_records: int
+    minimum_equivalence_class_size: int
+    mean_reidentification_risk: float
+    rare_value_count: int
+    equivalence_class_sizes: tuple[int, ...] = field(repr=False)
+    rare_attributes_by_record: tuple[tuple[str, ...], ...] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        counts = (
+            self.records_assessed,
+            self.equivalence_classes,
+            self.unique_records,
+            self.minimum_equivalence_class_size,
+            self.rare_value_count,
+        )
+        if any(value < 0 for value in counts):
+            raise ValueError("privacy_risk_count_invalid")
+        if (
+            not 0.0 <= self.mean_reidentification_risk <= 1.0
+            or len(self.equivalence_class_sizes) != self.records_assessed
+            or len(self.rare_attributes_by_record) != self.records_assessed
+        ):
+            raise ValueError("privacy_risk_assessment_invalid")
+        if any(size < 1 for size in self.equivalence_class_sizes):
+            raise ValueError("privacy_risk_class_size_invalid")
 
 
 @dataclass(frozen=True)

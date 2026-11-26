@@ -12,9 +12,7 @@ import tempfile
 from typing import Iterator, Mapping
 
 from cryptography.exceptions import InvalidTag
-from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from lumen_ex.contracts.identity import (
     IdentityDecision,
@@ -23,6 +21,7 @@ from lumen_ex.contracts.identity import (
     RegistryRecordMapping,
 )
 from lumen_ex.errors import ProcessingError
+from lumen_ex.key_derivation import derive_key
 
 
 _FIELDS = (
@@ -40,8 +39,6 @@ _FIELDS = (
 )
 _SHA256 = hashlib.sha256
 _NONCE_LENGTH = 12
-_KEY_LENGTH = 32
-_KDF_SALT = b"lumen-ex-global-identity-registry-v1"
 
 
 class EncryptedIdentityRegistry:
@@ -69,8 +66,8 @@ class EncryptedIdentityRegistry:
         secret_bytes = secret.encode("utf-8") if isinstance(secret, str) else secret
         if not secret_bytes:
             raise ProcessingError("registry_secret_missing")
-        encryption_key = _derive_key(secret_bytes, b"database-encryption")
-        index_key = _derive_key(secret_bytes, b"blind-index")
+        encryption_key = derive_key(secret_bytes, b"database-encryption")
+        index_key = derive_key(secret_bytes, b"blind-index")
         temporary_directory = tempfile.TemporaryDirectory(
             prefix="lumen-ex-registry-",
             dir=str(parent_dir) if parent_dir is not None else None,
@@ -655,15 +652,6 @@ class EncryptedIdentityRegistry:
     def _ensure_open(self) -> None:
         if self._closed:
             raise ProcessingError("registry_storage_error")
-
-
-def _derive_key(secret: bytes, purpose: bytes) -> bytes:
-    return HKDF(
-        algorithm=hashes.SHA256(),
-        length=_KEY_LENGTH,
-        salt=_KDF_SALT,
-        info=b"lumen-ex/" + purpose,
-    ).derive(secret)
 
 
 def _hmac_digest(key: bytes, message: bytes) -> bytes:

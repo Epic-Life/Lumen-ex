@@ -27,7 +27,12 @@ without changing the evaluator interface.
   ABSTAIN do not. Patient references are excluded from repr.
 - `ProcessingStatus`: sanitized, quarantined, or suppressed.
 - `SanitizationResult`: output locator/fields, safe error code if quarantined, and
-  non-negative metrics.
+  non-negative metrics. M06 adds output headers/path, an optional keyed patient
+  pseudonym, and an aggregate `PrivacyRiskAssessment`; raw values remain hidden from
+  repr.
+- `PrivacyRiskAssessment`: cohort counts, equivalence-class sizes, estimated mean
+  re-identification risk, rare-value count, and suppressed-attribute names. It does not
+  retain raw quasi-identifier values.
 - `OutputManifestEntry`: source hash, optional relative output, status, and a safe
   quarantine reason code.
 - `PipelineReport`: manifest entries, aggregate counts, timing, resource use, and
@@ -73,12 +78,14 @@ are evidence rankings, not calibrated probabilities.
 
 Protocols in `lumen_ex.stages` define the boundaries for ingestion, normalization,
 detection, linkage, privacy transformation, leak scanning, writing, and reporting.
-These are interface contracts; ingestion, identity normalization, and deterministic PII
-detection have implementations, while linkage and privacy transformation remain
-separate stages. `MultilingualPIIDetector` returns findings for structured values,
+These are interface contracts; ingestion, identity normalization, deterministic PII
+detection, linkage, and privacy transformation have modular implementations.
+`MultilingualPIIDetector` returns findings for structured values,
 free-text mentions, JSON keys, CSV headers, and filenames without modifying the record.
 The detector is available for injection through `PipelineStages` but is not wired into
-the production CLI or a sanitizer. The coordinator exposes `Pipeline.ingest_directory`
+the production CLI. The M06 `PrivacyTransformer` exposes a singleton stage adapter
+and a cohort-aware `transform_batch` API; the record-at-a-time coordinator does not
+yet provide the cohort integration needed to use it for release. The coordinator exposes `Pipeline.ingest_directory`
 and receives normalization, detection, linkage, transformation, leak-scanning,
 output-writing, and reporting implementations through `PipelineStages`. It writes only
 a result marked sanitized after the leak scanner accepts it, records every status for
