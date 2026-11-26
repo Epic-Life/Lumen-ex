@@ -106,31 +106,47 @@ PATTERNS = [
 
 class Stats:
     identifiers = 0
-    generalized = 0
     suppressed = 0
 
 
-def clean_text(text: str, text_detector=None) -> str:
+def clean_text(text: str, text_detector=None, *, count=True) -> str:
     """Replace detected identifiers with typed placeholders. TODO(team): much more than regex."""
     if text_detector is not None:
-        text, count = text_detector(text)
-        Stats.identifiers += count
+        text, detections = text_detector(text)
+        if count:
+            Stats.identifiers += detections
     for kind, rx in PATTERNS:
         if kind == "NAME" and text_detector is not None:
             continue
         text, n = rx.subn(f"[{kind}]" if kind != "NAME" else " [NAME]", text)
-        Stats.identifiers += n
+        if count:
+            Stats.identifiers += n
     return text
 
 
-def clean_value(v, text_detector=None):
+def clean_value(v, text_detector=None, hidden=None, parent_label="", renamed=None):
     if isinstance(v, str):
         return clean_text(v, text_detector)
     if isinstance(v, list):
-        return [clean_value(x, text_detector) for x in v]
+        return [clean_value(x, text_detector, hidden, parent_label) for x in v]
     if isinstance(v, dict):
-        # JSON keys can be PII too (for example a dict keyed by patient name)
-        return {clean_text(k, text_detector): clean_value(x, text_detector) for k, x in v.items()}
+        result = {}
+        for key, value in v.items():
+            probe = lambda text: clean_text(text, text_detector, count=False)
+            new_key = hidden.key(key, parent_label, probe) if hidden else clean_text(key, text_detector)
+            if new_key != key:
+                while new_key in result or new_key in v:
+                    new_key += "_"
+                Stats.identifiers += 1
+                if renamed is not None:
+                    renamed[key] = new_key
+            sanitized = hidden.value(key, value, v, probe, parent_label) if hidden and isinstance(value, str) else None
+            if sanitized is not None:
+                Stats.identifiers += sanitized != value
+                result[new_key] = sanitized
+            else:
+                result[new_key] = clean_value(value, text_detector, hidden, key)
+        return result
     return v  # numbers, booleans, null keep their type
 
 
@@ -206,14 +222,29 @@ def read_text(raw: bytes) -> str:
     return text
 
 
-def process_csv(text, delimiter, rel, records, text_detector, private_column, patient_ids):
+def process_csv(
+    text, delimiter, rel, records, text_detector, private_column, patient_ids, hidden, generalizer=None,
+):
     header, body = parse_csv(text, delimiter)
     if not header:
         return ""
     buf = io.StringIO()
     writer = csv.writer(buf, delimiter=delimiter, lineterminator="\n")
     pids = [patient_ids.get((rel, f"row:{i}")) for i in range(len(body))]
-    writer.writerow(header)
+    if hidden:
+        output_header = []
+        renamed_labels = set()
+        for label in header:
+            name = hidden.header(label, lambda value: clean_text(value, text_detector, count=False))
+            if name != label:
+                Stats.identifiers += 1
+                while name in header or name in renamed_labels:
+                    name += "_"
+                renamed_labels.add(name)
+            output_header.append(name)
+        writer.writerow(output_header)
+    else:
+        writer.writerow(header)
     private_fields = [bool(private_column and private_column(column)) for column in header]
     patient_column = next(
         (index for index, column in enumerate(header)
@@ -222,9 +253,21 @@ def process_csv(text, delimiter, rel, records, text_detector, private_column, pa
         None,
     )
     for i, (row, pid) in enumerate(zip(body, pids)):
+        locator = f"row:{i}"
+        key = pid or repr((rel, locator))
+        district = next(
+            (cell for label, cell in zip(header, row)
+             if label.strip().casefold() in {"district", "jila"} and cell.strip()),
+            None,
+        )
+        generalized = False
         cleaned = []
-        for cell, is_private in zip(row, private_fields):
-            if cell.strip() and is_private:
+        for label, cell, is_private in zip(header, row, private_fields):
+            transformed = generalizer.field(label, cell, key, district=district) if generalizer else cell
+            if transformed != cell:
+                cleaned.append(transformed)
+                generalized = True
+            elif cell.strip() and is_private:
                 cleaned.append("[REDACTED]")
                 Stats.identifiers += 1
             else:
@@ -234,7 +277,10 @@ def process_csv(text, delimiter, rel, records, text_detector, private_column, pa
         else:
             pid = None
         writer.writerow(cleaned)
-        records.append({"file": f"sanitized/{rel}", "loc": f"row:{i}", "patient": pid})
+        record = {"file": f"sanitized/{rel}", "loc": locator, "patient": pid}
+        if generalized:
+            record["status"] = "generalized"
+        records.append(record)
     return buf.getvalue()
 
 
@@ -264,20 +310,44 @@ def embed_json_patient(record, pid):
     return True
 
 
-def process_json(text, rel, records, text_detector, patient_ids):
+def process_json(text, rel, records, text_detector, patient_ids, hidden, generalizer=None):
     data = json.loads(text)
+    initial_record = len(records)
     for locator, record in json_records(data):
         pid = patient_ids.get((rel, locator)) if isinstance(record, dict) else None
+        generalized = generalizer is not None and generalizer.mapping(
+            record, pid or repr((rel, locator)),
+        )
         if pid and not embed_json_patient(record, pid):
             pid = None
-        records.append({"file": f"sanitized/{rel}", "loc": locator, "patient": pid})
-    return json.dumps(clean_value(data, text_detector), ensure_ascii=False, indent=2) + "\n"
+        entry = {"file": f"sanitized/{rel}", "loc": locator, "patient": pid}
+        if generalized:
+            entry["status"] = "generalized"
+        records.append(entry)
+    if hidden:
+        Stats.identifiers += hidden.scrub_fhir(data, lambda value: clean_text(value, text_detector, count=False))
+    renamed = {}
+    cleaned = clean_value(data, text_detector, hidden, renamed=renamed)
+    if renamed:
+        for entry in records[initial_record:]:
+            if entry["loc"].startswith("/"):
+                key, _, index = entry["loc"][1:].rpartition("/")
+                key = key.replace("~1", "/").replace("~0", "~")
+                if key in renamed:
+                    # Original keys containing PII cannot appear in the sidecar.
+                    safe_key = renamed[key].replace("~", "~0").replace("/", "~1")
+                    entry["loc"] = f"/{safe_key}/{index}"
+    return json.dumps(cleaned, ensure_ascii=False, indent=2) + "\n"
 
 
-def process_text(text, rel, records, text_detector, patient_ids):
+def process_text(text, rel, records, text_detector, patient_ids, generalizer=None):
     pid = patient_ids.get((rel, "doc"))
-    records.append({"file": f"sanitized/{rel}", "loc": "doc", "patient": pid})
-    cleaned = clean_text(text, text_detector)
+    entry = {"file": f"sanitized/{rel}", "loc": "doc", "patient": pid}
+    transformed = generalizer.text(text, pid or repr((rel, "doc"))) if generalizer else text
+    if transformed != text:
+        entry["status"] = "generalized"
+    records.append(entry)
+    cleaned = clean_text(transformed, text_detector)
     return f"Patient reference: {pid}\n{cleaned}" if pid else cleaned
 
 
@@ -298,7 +368,10 @@ def main() -> int:
     return run(Path(a.input), Path(a.output))
 
 
-def run(inp: Path, out: Path, *, text_detector=None, private_column=None, build_link_index=None) -> int:
+def run(
+    inp: Path, out: Path, *, text_detector=None, private_column=None,
+    build_link_index=None, hidden=None, generalizer=None,
+) -> int:
     t0 = time.monotonic()
     Stats.identifiers = 0
     san = out / "sanitized"
@@ -311,6 +384,8 @@ def run(inp: Path, out: Path, *, text_detector=None, private_column=None, build_
         location: pseudonym(key)
         for location, key in build_link_index(input_records(paths, inp)).items()
     } if build_link_index else {}
+    original_paths = {path.relative_to(inp).as_posix() for path in paths}
+    safe_paths = set()
     for path in paths:
         rel = path.relative_to(inp).as_posix()
         raw = path.read_bytes()
@@ -320,17 +395,34 @@ def run(inp: Path, out: Path, *, text_detector=None, private_column=None, build_
             if ext not in (".csv", ".tsv", ".json", ".txt"):
                 raise ValueError("unsupported_format")
             text = read_text(raw)
-            # TODO(team): a file NAME can contain PII: rename it and report the new path
+            initial_record = len(records)
             if ext in (".csv", ".tsv"):
-                result = process_csv(text, "\t" if ext == ".tsv" else ",", rel, records, text_detector, private_column, patient_ids)
+                result = process_csv(
+                    text, "\t" if ext == ".tsv" else ",", rel, records, text_detector,
+                    private_column, patient_ids, hidden, generalizer=generalizer,
+                )
             elif ext == ".json":
-                result = process_json(text, rel, records, text_detector, patient_ids)
+                result = process_json(text, rel, records, text_detector, patient_ids, hidden, generalizer=generalizer)
             else:
-                result = process_text(text, rel, records, text_detector, patient_ids)
-            dest = san / rel
+                result = process_text(text, rel, records, text_detector, patient_ids, generalizer=generalizer)
+            output_rel = rel
+            if hidden:
+                output_rel = hidden.file_path(
+                    path.relative_to(inp),
+                    lambda value: clean_text(value, text_detector, count=False),
+                )
+            if output_rel != rel:
+                Stats.identifiers += 1
+                while output_rel in original_paths or output_rel in safe_paths:
+                    renamed = Path(output_rel)
+                    output_rel = renamed.with_name(renamed.stem + "_" + renamed.suffix).as_posix()
+                for record in records[initial_record:]:
+                    record["file"] = f"sanitized/{output_rel}"
+            safe_paths.add(output_rel)
+            dest = san / output_rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(result, encoding="utf-8", newline="")
-            entry.update(output=f"sanitized/{rel}", status="sanitized")
+            entry.update(output=f"sanitized/{output_rel}", status="sanitized")
         except (ValueError, RecursionError, UnicodeError, csv.Error) as exc:
             # Fail safe: never copy what we could not clean. The reason holds no file content.
             reason = str(exc) if isinstance(exc, ValueError) and str(exc).isidentifier() else type(exc).__name__
@@ -353,7 +445,7 @@ def run(inp: Path, out: Path, *, text_detector=None, private_column=None, build_
             "files_total": len(files), "files_sanitized": n_san, "files_quarantined": len(files) - n_san,
             "records_processed": len(records), "identifiers_detected": Stats.identifiers,
             "records_linked": sum(r["patient"] is not None for r in records),
-            "records_generalized": Stats.generalized, "records_suppressed": Stats.suppressed,
+            "records_generalized": sum(r.get("status") == "generalized" for r in records), "records_suppressed": Stats.suppressed,
             "records_quarantined": 0,
         },
         "timing": {"seconds": round(time.monotonic() - t0, 2)},

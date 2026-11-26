@@ -29,6 +29,12 @@ by a phone number or date of birth. Records with insufficient evidence stay
 unlinked. The release secret keys the pseudonyms written into the sanitized
 records and the record index.
 
+The sanitizer also coarsens labeled ages, PIN codes, and village fields with a
+known district. It shifts recognized patient dates with a secret-keyed offset
+shared across linked records. Unlinked records use a record-specific offset.
+Hidden-channel checks cover filenames, schema labels, source metadata, and
+supported text attachments. Unknown attachment formats are quarantined.
+
 ## Setup
 
 Python 3.10 or later is required. Runtime dependencies are
