@@ -46,6 +46,32 @@ class IngestionStatus(str, Enum):
     QUARANTINED = "quarantined"
 
 
+class DetectionEntityType(str, Enum):
+    PATIENT_NAME = "PATIENT_NAME"
+    RELATIVE_NAME = "RELATIVE_NAME"
+    DATE_OF_BIRTH = "DATE_OF_BIRTH"
+    AGE = "AGE"
+    GENDER = "GENDER"
+    PHONE = "PHONE"
+    EMAIL = "EMAIL"
+    AADHAAR = "AADHAAR"
+    ABHA = "ABHA"
+    PAN = "PAN"
+    MEDICAL_RECORD_NUMBER = "MEDICAL_RECORD_NUMBER"
+    INSURANCE_ID = "INSURANCE_ID"
+    ADDRESS = "ADDRESS"
+    LOCATION = "LOCATION"
+    PIN_CODE = "PIN_CODE"
+    OTHER_IDENTIFIER = "OTHER_IDENTIFIER"
+
+
+class DetectionChannel(str, Enum):
+    VALUE = "value"
+    KEY = "key"
+    HEADER = "header"
+    FILENAME = "filename"
+
+
 @dataclass(frozen=True)
 class InputFileMetadata:
     relative_path: str = field(repr=False)
@@ -171,13 +197,38 @@ class NormalizedRecord:
 
 
 @dataclass(frozen=True)
+class DetectionFinding:
+    entity_type: DetectionEntityType
+    value: str = field(repr=False)
+    source_key: str = field(repr=False)
+    channel: DetectionChannel
+    start: int | None = None
+    end: int | None = None
+
+    def __post_init__(self) -> None:
+        if not self.value:
+            raise ValueError("detection_finding_value_invalid")
+        if (self.start is None) != (self.end is None):
+            raise ValueError("detection_finding_span_invalid")
+        if self.start is not None and (
+            self.start < 0 or self.end is None or self.end <= self.start
+        ):
+            raise ValueError("detection_finding_span_invalid")
+
+
+@dataclass(frozen=True)
 class DetectionResult:
     identifier_count: int
     entity_counts: dict[str, int] = field(default_factory=dict)
+    findings: tuple[DetectionFinding, ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
         if self.identifier_count < 0 or any(count < 0 for count in self.entity_counts.values()):
             raise ValueError("detection_count_invalid")
+        if self.findings and self.identifier_count != len(self.findings):
+            raise ValueError("detection_finding_count_invalid")
+        if self.entity_counts and sum(self.entity_counts.values()) != self.identifier_count:
+            raise ValueError("detection_entity_count_invalid")
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,4 @@
-# Shared contracts (foundation and ingestion)
+# Shared contracts (foundation through detection)
 
 Internal Python dataclasses and enums live in `lumen_ex.contracts.models`. They are
 deliberately separate from on-disk submission formats so pipeline code can evolve
@@ -20,7 +20,9 @@ without changing the evaluator interface.
 - `NormalizedRecord`: source metadata, a source locator, parsed fields, optional identity
   projections, and optional source structure. Field values, locators, and projections
   are excluded from repr to reduce accidental logging exposure.
-- `DetectionResult`: non-negative detection totals and optional entity-type counts.
+- `DetectionResult`: non-negative detection totals, entity-type counts, and optional
+  findings. A `DetectionFinding` carries an entity type, source channel, source key, and
+  character span; the raw matched value and source key are excluded from repr.
 - `LinkageAction` / `LinkageDecision`: LINK requires a patient reference; DO_NOT_LINK and
   ABSTAIN do not. Patient references are excluded from repr.
 - `ProcessingStatus`: sanitized, quarantined, or suppressed.
@@ -56,13 +58,16 @@ helpers do not decode files or guess unlabeled names.
 
 Protocols in `lumen_ex.stages` define the boundaries for ingestion, normalization,
 detection, linkage, privacy transformation, leak scanning, writing, and reporting.
-These are interface contracts; file ingestion is the implementation scope of this
-milestone, while existing identity/matching helpers remain separate. The coordinator
-exposes `Pipeline.ingest_directory` and receives normalization, detection, linkage,
-transformation, leak-scanning, output-writing, and reporting implementations through
-`PipelineStages`. It writes only a result marked sanitized after the leak scanner
-accepts it, records every status for reporting, and finalizes a manifest after
-processing.
+These are interface contracts; ingestion, identity normalization, and deterministic PII
+detection have implementations, while linkage and privacy transformation remain
+separate stages. `MultilingualPIIDetector` returns findings for structured values,
+free-text mentions, JSON keys, CSV headers, and filenames without modifying the record.
+The detector is available for injection through `PipelineStages` but is not wired into
+the production CLI or a sanitizer. The coordinator exposes `Pipeline.ingest_directory`
+and receives normalization, detection, linkage, transformation, leak-scanning,
+output-writing, and reporting implementations through `PipelineStages`. It writes only
+a result marked sanitized after the leak scanner accepts it, records every status for
+reporting, and finalizes a manifest after processing.
 
 ## Official output compatibility
 

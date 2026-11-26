@@ -1,0 +1,312 @@
+import hashlib
+import unittest
+
+from lumen_ex.contracts import (
+    DetectionChannel,
+    DetectionEntityType,
+    InputFileMetadata,
+    InputFormat,
+    NormalizedRecord,
+    ParsedRecord,
+)
+from lumen_ex.detection import MultilingualPIIDetector
+from lumen_ex.errors import ProcessingError
+from lumen_ex.identity import PatientIdentityNormalizer
+
+
+class MultilingualPIIDetectorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.detector = MultilingualPIIDetector()
+
+    def test_detects_structured_patient_fields_and_identifier_types(self) -> None:
+        source = _source("registration/patient.csv", InputFormat.CSV)
+        normalized = PatientIdentityNormalizer().normalize(
+            ParsedRecord(
+                source,
+                "row:0",
+                {
+                    "Patient Name": "Asha Sharma",
+                    "Aadhaar No": "१२३४ ५६७८ ९०१२",
+                    "Mobile Number": "+91 98765 43210",
+                    "DOB": "1982-04-13",
+                    "Insurance Policy Number": "POLICY-TEST-1",
+                    "Email Address": "asha@example.test",
+                },
+                {"headers": ("Patient Name", "Aadhaar No")},
+            )
+        )
+
+        result = self.detector.detect(normalized)
+        entity_types = {finding.entity_type for finding in result.findings}
+
+        self.assertTrue(
+            {
+                DetectionEntityType.PATIENT_NAME,
+                DetectionEntityType.AADHAAR,
+                DetectionEntityType.PHONE,
+                DetectionEntityType.DATE_OF_BIRTH,
+                DetectionEntityType.INSURANCE_ID,
+                DetectionEntityType.EMAIL,
+            }.issubset(entity_types)
+        )
+        self.assertEqual(result.identifier_count, len(result.findings))
+        self.assertEqual(sum(result.entity_counts.values()), result.identifier_count)
+
+    def test_detects_hindi_and_hinglish_free_text_and_relative_names(self) -> None:
+        text = (
+            "नाम: मोहम्मद शाहिद\n"
+            "उम्र: ४८ वर्ष\n"
+            "मोबाइल: ९८७६५४३२१०\n"
+            "W/o Rajan\n"
+            "C/O Ramesh\n"
+            "C/O fever\n"
+            "Arif sahab ka BP 150/90"
+        )
+        normalized = PatientIdentityNormalizer().normalize(
+            ParsedRecord(
+                _source("notes/hinglish.txt", InputFormat.TEXT),
+                "doc",
+                {"text": text},
+            )
+        )
+
+        result = self.detector.detect(normalized)
+        pairs = {(finding.entity_type, finding.value) for finding in result.findings}
+
+        self.assertIn((DetectionEntityType.PATIENT_NAME, "मोहम्मद शाहिद"), pairs)
+        self.assertIn((DetectionEntityType.AGE, "४८ वर्ष"), pairs)
+        self.assertIn((DetectionEntityType.PHONE, "९८७६५४३२१०"), pairs)
+        self.assertIn((DetectionEntityType.RELATIVE_NAME, "Rajan"), pairs)
+        self.assertIn((DetectionEntityType.RELATIVE_NAME, "Ramesh"), pairs)
+        self.assertIn((DetectionEntityType.PATIENT_NAME, "Arif"), pairs)
+        self.assertNotIn((DetectionEntityType.RELATIVE_NAME, "fever"), pairs)
+
+    def test_detects_fragmented_patient_and_relative_name(self) -> None:
+        normalized = NormalizedRecord(
+            source=_source("notes/fragment.txt", InputFormat.TEXT),
+            locator="doc",
+            fields={"text": "Meera, W/o Rajan"},
+        )
+
+        result = self.detector.detect(normalized)
+        pairs = {(finding.entity_type, finding.value) for finding in result.findings}
+
+        self.assertIn((DetectionEntityType.PATIENT_NAME, "Meera"), pairs)
+        self.assertIn((DetectionEntityType.RELATIVE_NAME, "Rajan"), pairs)
+
+    def test_detects_names_identifiers_in_keys_headers_and_filenames(self) -> None:
+        source = _source(
+            "records/Mohammed_Shahid_9876543210.csv",
+            InputFormat.CSV,
+        )
+        normalized = PatientIdentityNormalizer().normalize(
+            ParsedRecord(
+                source,
+                "row:0",
+                {
+                    "Patient Name": "मोहम्मद शाहिद",
+                    "Mohammad Shahid": "hidden-key-value",
+                    "phone": "9876543210",
+                },
+                {"headers": ("Patient Name", "Mohammad Shahid")},
+            )
+        )
+
+        result = self.detector.detect(normalized)
+        located = {
+            (finding.entity_type, finding.channel) for finding in result.findings
+        }
+
+        self.assertIn(
+            (DetectionEntityType.PATIENT_NAME, DetectionChannel.KEY), located
+        )
+        self.assertIn(
+            (DetectionEntityType.PATIENT_NAME, DetectionChannel.HEADER), located
+        )
+        self.assertIn(
+            (DetectionEntityType.PATIENT_NAME, DetectionChannel.FILENAME), located
+        )
+        self.assertIn((DetectionEntityType.PHONE, DetectionChannel.FILENAME), located)
+
+    def test_detects_labeled_names_in_keys_and_fhir_identifier_types(self) -> None:
+        key_record = NormalizedRecord(
+            source=_source("metadata/record.json", InputFormat.JSON),
+            locator="doc",
+            fields={"Patient_Asha_Sharma": "metadata"},
+        )
+        key_result = self.detector.detect(key_record)
+        self.assertTrue(
+            any(
+                finding.entity_type is DetectionEntityType.PATIENT_NAME
+                and finding.channel is DetectionChannel.KEY
+                for finding in key_result.findings
+            )
+        )
+
+        fhir = {
+            "resourceType": "Patient",
+            "identifier": [
+                {
+                    "system": "urn:example:aadhaar",
+                    "value": "1234-5678-9012",
+                },
+                {
+                    "type": {"text": "Insurance policy number"},
+                    "value": "POLICY-TEST-3",
+                },
+            ],
+        }
+        normalized = PatientIdentityNormalizer().normalize(
+            ParsedRecord(
+                _source("fhir/patient.json", InputFormat.FHIR),
+                "doc",
+                fhir,
+            )
+        )
+        fhir_result = self.detector.detect(normalized)
+        found_types = {finding.entity_type for finding in fhir_result.findings}
+
+        self.assertIn(DetectionEntityType.AADHAAR, found_types)
+        self.assertIn(DetectionEntityType.INSURANCE_ID, found_types)
+
+    def test_does_not_flag_clinician_names_or_common_clinical_content(self) -> None:
+        clinical = (
+            "Dr. Ramesh reviewed the patient. "
+            "C/O fever. Ramipril 5 mg; Dolo 650 BD x 5 days; "
+            "1-0-1; Parkinson's disease; BP 150/90."
+        )
+        normalized = NormalizedRecord(
+            source=_source("notes/clinical.txt", InputFormat.TEXT),
+            locator="doc",
+            fields={
+                "text": clinical,
+                "name": "Kumar",
+                "Patient Name": "Parkinson's disease",
+                "doctor": {"name": "Dr Ramesh", "phone": "9876543210"},
+            },
+        )
+
+        result = self.detector.detect(normalized)
+
+        self.assertEqual(result.findings, ())
+        self.assertEqual(normalized.fields["text"], clinical)
+
+    def test_name_label_stops_before_clinical_text_on_the_same_line(self) -> None:
+        normalized = PatientIdentityNormalizer().normalize(
+            ParsedRecord(
+                _source("notes/clinical-name.txt", InputFormat.TEXT),
+                "doc",
+                {"text": "Patient Name: Arif sahab ka BP 150/90"},
+            )
+        )
+
+        result = self.detector.detect(normalized)
+        names = [
+            finding.value
+            for finding in result.findings
+            if finding.entity_type is DetectionEntityType.PATIENT_NAME
+        ]
+
+        self.assertEqual(names, ["Arif"])
+
+    def test_detects_phone_and_email_but_rejects_clinical_numbers(self) -> None:
+        normalized = NormalizedRecord(
+            source=_source("notes/contact.txt", InputFormat.TEXT),
+            locator="doc",
+            fields={
+                "text": (
+                    "Patient contact: 98765-43210; email: patient@example.test. "
+                    "Dose 650 mg, BP 150/90, schedule 1-0-1."
+                )
+            },
+        )
+
+        result = self.detector.detect(normalized)
+        found = {finding.entity_type for finding in result.findings}
+
+        self.assertEqual(found, {DetectionEntityType.PHONE, DetectionEntityType.EMAIL})
+
+    def test_detects_pan_abha_masked_aadhaar_mrn_and_pin(self) -> None:
+        normalized = NormalizedRecord(
+            source=_source("notes/identifiers.txt", InputFormat.TEXT),
+            locator="doc",
+            fields={
+                "text": (
+                    "PAN: ABCDE1234F\n"
+                    "ABHA: 12-3456-7890-1234\n"
+                    "Aadhaar: XXXX XXXX 1234\n"
+                    "UHID: JJH-TEST-9\n"
+                    "PIN: 229001"
+                )
+            },
+        )
+
+        result = self.detector.detect(normalized)
+        found = {finding.entity_type for finding in result.findings}
+
+        self.assertTrue(
+            {
+                DetectionEntityType.PAN,
+                DetectionEntityType.ABHA,
+                DetectionEntityType.AADHAAR,
+                DetectionEntityType.MEDICAL_RECORD_NUMBER,
+                DetectionEntityType.PIN_CODE,
+            }.issubset(found)
+        )
+
+    def test_repr_hides_detected_values_and_source_keys(self) -> None:
+        normalized = NormalizedRecord(
+            source=_source("private/Asha_Sharma.csv", InputFormat.CSV),
+            locator="row:0",
+            fields={"Patient Name": "Asha Sharma"},
+            identities=PatientIdentityNormalizer()
+            .normalize(
+                ParsedRecord(
+                    _source("private/Asha_Sharma.csv", InputFormat.CSV),
+                    "row:0",
+                    {"Patient Name": "Asha Sharma"},
+                )
+            )
+            .identities,
+        )
+
+        result = self.detector.detect(normalized)
+
+        self.assertNotIn("Asha Sharma", repr(result))
+        self.assertNotIn("Patient Name", repr(result))
+        self.assertNotIn("Asha Sharma", repr(result.findings[0]))
+        self.assertNotIn("Patient Name", repr(result.findings[0]))
+
+    def test_quarantines_overdeep_structures_with_a_safe_error_code(self) -> None:
+        nested: dict[str, object] = {}
+        current = nested
+        for _ in range(130):
+            child: dict[str, object] = {}
+            current["nested"] = child
+            current = child
+        current["patient_id"] = "PRIVATE-TEST-ID"
+        record = NormalizedRecord(
+            source=_source("records/deep.json", InputFormat.JSON),
+            locator="doc",
+            fields=nested,
+        )
+
+        with self.assertRaises(ProcessingError) as error:
+            self.detector.detect(record)
+
+        self.assertEqual(error.exception.code, "detection_structure_depth_exceeded")
+        self.assertNotIn("PRIVATE-TEST-ID", str(error.exception))
+
+
+def _source(path: str, file_format: InputFormat) -> InputFileMetadata:
+    return InputFileMetadata(
+        relative_path=path,
+        sha256=hashlib.sha256(path.encode("utf-8")).hexdigest(),
+        size_bytes=1,
+        detected_format=file_format,
+        encoding="utf-8",
+    )
+
+
+if __name__ == "__main__":
+    unittest.main()

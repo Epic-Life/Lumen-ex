@@ -1,4 +1,4 @@
-# Lumen-ex architecture (foundation and ingestion)
+# Lumen-ex architecture (foundation through detection)
 
 Lumen-ex is a single-process Python application. It runs locally, offline, on CPU;
 there are no services, model downloads, or runtime network dependencies. The root
@@ -18,8 +18,9 @@ Parsed records → normalization → PII detection → record linkage
                 → privacy transformation → leak scan → output writer → report
 ```
 
-The later stages are extension points, not implemented privacy functionality in this
-ingestion milestone.
+PII detection now has a deterministic implementation; record linkage and later privacy
+stages remain extension points. The detection engine is not wired into the production
+CLI or an output transformation in this milestone.
 The current adapter preserves the shipped starter's basic behavior and its known
 limitations; it is not a production-ready firewall.
 
@@ -31,7 +32,7 @@ limitations; it is not a production-ready firewall.
 | Input discovery / ingestion | `lumen_ex.ingestion.StreamingIngestor` walks inputs in stable order, rejects symlinks, hashes source files in chunks, detects supported encodings, prevalidates each file, and returns per-file ingestion or quarantine outcomes. CSV/TSV rows retain raw headers/cells; JSON record arrays use escaped JSON Pointers; standalone FHIR R4 resources, complete FHIR Bundles, and text files use `doc`. Parsed records are lazy and record values are hidden from repr. |
 | Shared contracts | Hold file metadata, normalized records with optional identity projections and source structure, typed processing outcomes, linkage decisions, manifest entries, and aggregate reports without depending on format-specific algorithms. |
 | Normalization | Normalize representation while retaining source locators and medical values. `Normalizer.normalize` accepts a `ParsedRecord` and returns a `NormalizedRecord`; `PatientIdentityNormalizer` provides the identity-projection implementation. |
-| PII detection | Produce counts and typed findings without deciding identity. `Detector.detect` returns `DetectionResult`. No detector is implemented in this milestone. |
+| PII detection | `lumen_ex.detection.MultilingualPIIDetector` scans structured fields, free text, keys, headers, and filenames for context-labelled identity fields and validated direct identifiers. It returns typed, offset-bearing findings with values and source keys hidden from repr. It is deterministic, offline, and does not alter records; it is not a general-purpose NER model. |
 | Identity extraction and normalization | `lumen_ex.identity` projects parsed row/object values, FHIR R4 Patient resources or Bundles, and explicitly labeled English, Hindi, or Hinglish note fields into compact `PatientIdentity` values. It includes identity and insurance identifiers, and patient-contact phones are distinguished from clinician context. `PatientIdentityNormalizer` attaches projections without changing parsed source fields. |
 | Identity registry storage | `lumen_ex.registry.EncryptedIdentityRegistry` stores encrypted evidence in one per-run SQLite database and keyed block indexes for candidate retrieval. It is shared across batches and removes its private database directory on close. |
 | Indic name normalization | `lumen_ex.detection.indic_names` normalizes supplied Latin/Devanagari name candidates with ITRANS transliteration, Unicode, punctuation, a small honorific vocabulary, and a limited set of common Mohammad spelling variants. It preserves initials and token order; name equality is not proof of identity. |

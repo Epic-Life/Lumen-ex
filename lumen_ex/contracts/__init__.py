@@ -7,6 +7,9 @@ from lumen_ex.contracts.identity import (
     RegistryRecordMapping,
 )
 from lumen_ex.contracts.models import (
+    DetectionChannel,
+    DetectionEntityType,
+    DetectionFinding,
     DetectionResult,
     IngestionFileResult,
     IngestionResult,
@@ -29,6 +32,9 @@ __all__ = [
     "IdentityDecision",
     "PatientIdentity",
     "RegistryRecordMapping",
+    "DetectionChannel",
+    "DetectionEntityType",
+    "DetectionFinding",
     "DetectionResult",
     "IngestionFileResult",
     "IngestionResult",

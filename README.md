@@ -2,9 +2,10 @@
 
 Lumen-ex is an offline, CPU-only, LLM-free healthcare-data privacy firewall project
 for the Secret Wards hackathon track. The repository includes its submission
-foundation, a file-ingestion API, and separate identity/matching helpers; the
-submission CLI still uses the starter adapter. The project does **not** yet implement
-a complete privacy firewall, PII detection pipeline, anonymization, or privacy scoring.
+foundation, file-ingestion API, identity helpers, and a deterministic PII detector;
+the submission CLI still uses the starter adapter. The project does **not** yet
+implement an integrated privacy firewall, PII transformation, anonymization, or privacy
+scoring.
 
 The official challenge kit is included in this repository. Read [START_HERE.md](START_HERE.md)
 and the official [problem statement](docs/PROBLEM_STATEMENT.md),
@@ -26,8 +27,9 @@ read it, and this foundation does not import it.
 
 These are project requirements, not claims that the current baseline achieves them.
 The shipped submission CLI still uses the starter adapter, which provides basic regex
-replacement and has incomplete handling of hidden PII channels. The ingestion API is
-available to the modular pipeline but does not change the official CLI output path.
+replacement and has incomplete handling of hidden PII channels. The modular
+`MultilingualPIIDetector` reports typed, offset-bearing findings but does not modify
+records and is not wired into the official CLI output path.
 
 ## Setup
 
@@ -63,9 +65,9 @@ python -m unittest discover -s tests -v
 python check_submission.py --repo . --input dev\input --run
 ```
 
-`check_submission.py` may show a reminder for the separate 2-page Project Brief PDF;
-that deliverable is outside this foundation milestone. Do not treat a format validator
-pass or the starter's practice score as evidence that the privacy firewall is complete.
+`check_submission.py` may show a reminder for the separate 2-page Project Brief PDF.
+Do not treat a format validator pass or the starter's practice score as evidence that
+the privacy firewall is complete.
 
 ## Structure
 
@@ -84,9 +86,10 @@ lumen_ex/
   identity.py              identity extraction and field normalization
   registry.py              encrypted per-run registry storage
   detection/indic_names.py Devanagari-aware candidate name normalization
+  detection/pii.py       deterministic multilingual PII detection
   baseline.py              compatibility adapter for the shipped starter
 starter/                   official starter and policy (preserved)
-tests/                     foundation and ingestion tests
+tests/                     foundation, ingestion, identity, and detection tests
 docs/architecture.md       responsibilities, boundaries, and data flow
 docs/contracts.md          internal models and official format compatibility
 docs/decisions/            material architecture decisions
