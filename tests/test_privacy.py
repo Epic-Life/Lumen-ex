@@ -62,6 +62,12 @@ class DateTransformationTests(unittest.TestCase):
             DateShifter("date-secret").shift_text("01/02/2020", "cluster-a")
         self.assertEqual(raised.exception.code, "privacy_date_format_ambiguous")
 
+    def test_unambiguous_numeric_dates_are_emitted_in_iso_format(self) -> None:
+        shifter = DateShifter("date-secret")
+        shifted = shifter.shift_text("11/11/2020 to 2020/11/13", "cluster-a")
+        start, end = map(date_from_iso, shifted.split(" to "))
+        self.assertEqual((end - start).days, 2)
+
 
 class GeneralizationTests(unittest.TestCase):
     def test_age_bands_include_true_age_and_bound_the_elderly_tail(self) -> None:

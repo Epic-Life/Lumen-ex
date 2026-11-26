@@ -343,10 +343,14 @@ def _name_similarity(first: str, second: str) -> float:
 def _has_independent_support(evidence: tuple[str, ...]) -> bool:
     evidence_set = set(evidence)
     strong_identifier = bool(
-        evidence_set & {f"{field}_exact" for field in _STRONG_IDENTIFIERS}
+        evidence_set & {
+            f"{field}_exact" for field in _STRONG_IDENTIFIERS - {"hospital_identifier"}
+        }
     )
     name_support = "name_similar" in evidence_set
     if strong_identifier:
+        return True
+    if "hospital_identifier_exact" in evidence_set and name_support:
         return True
     has_second_clue = bool(
         evidence_set

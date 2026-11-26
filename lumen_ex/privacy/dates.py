@@ -14,6 +14,7 @@ _DATE_TOKEN = re.compile(
     r"(?<!\d)(?:"
     r"\d{4}-\d{2}-\d{2}(?:[T ][0-9]{2}:[0-9]{2}"
     r"(?::[0-9]{2}(?:\.\d+)?)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)?"
+    r"|\d{4}/\d{1,2}/\d{1,2}"
     r"|\d{1,2}[./-]\d{1,2}[./-]\d{4}"
     r")(?!\d)"
 )
@@ -61,7 +62,7 @@ class DateShifter:
                     raise ProcessingError("privacy_date_format_ambiguous")
                 raise ProcessingError("privacy_date_invalid")
             shifted = _shift_date(date.fromisoformat(normalized), offset)
-            return _format_date_token(token, shifted)
+            return shifted.isoformat()
 
         return _DATE_TOKEN.sub(replace, text)
 
@@ -102,23 +103,3 @@ def _is_ambiguous_date(token: str) -> bool:
     except ValueError:
         return False
     return first != second
-
-
-def _format_date_token(token: str, value: date) -> str:
-    if token[4:5] == "-" and len(token) == 10:
-        return value.isoformat()
-    if "/" in token:
-        first, _, _ = token.split("/")
-        if len(first) == 4:
-            return f"{value.year:04d}/{value.month:02d}/{value.day:02d}"
-        if int(first) > 12:
-            return value.strftime("%d/%m/%Y")
-        return value.strftime("%m/%d/%Y")
-    if "." in token:
-        return value.strftime("%d.%m.%Y")
-    first = token.split("-", 1)[0]
-    if len(first) == 4:
-        return value.strftime("%Y-%m-%d")
-    if int(first) > 12:
-        return value.strftime("%d-%m-%Y")
-    return value.strftime("%m-%d-%Y")

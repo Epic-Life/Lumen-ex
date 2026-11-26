@@ -1,4 +1,4 @@
-# Lumen-ex architecture (through output and reporting)
+# Lumen-ex release architecture
 
 Lumen-ex is a single-process Python application. It runs locally, offline, on CPU;
 there are no services, model downloads, or runtime network dependencies. The root
@@ -19,11 +19,16 @@ raksha.toml → main.py / CLI → validated policy, secret, and input/output pat
                               → records.jsonl, report.json, and contract validation
 ```
 
-The existing M02–M07 processing stages are integrated into submission output. The
+The processing stages are integrated into submission output. The
 release pipeline retains the complete cohort for M06 risk assessment, then groups
 results by source file so a file is emitted only after its sanitized representation
 and record mappings pass the M07 scanner. The scanner is a fail-closed safeguard for
 recognized findings, not a guarantee of complete de-identification.
+
+The writer rereads source bytes to verify the ingestion digest and reconstruct
+the original file envelope and headers. Its contract validator independently
+resolves published locators and verifies pseudonyms against on-disk artifacts.
+The practice truth and synthetic attacker are used by development tools only.
 
 ## Boundaries and responsibilities
 
@@ -90,10 +95,11 @@ available through `Pipeline.ingest_directory` and is also used directly by the
 submission `ReleasePipeline`.
 
 The registry provides encrypted storage, exact keyed block lookup, and streaming
-candidate iteration. Candidate scoring is a separate stage and does not merge patients.
-Global cluster reconciliation remains a later stage. The matcher uses a bounded
-candidate set; overflow is unresolved rather than truncated to a potentially misleading
-best match. Its database is per-run and must be closed to remove the encrypted database
+candidate iteration. The release uses a file digest as a conservative namespace
+for hospital-local identifiers and requires corroborating name evidence when
+that identifier is the only exact identity match. Cross-file matches rely on
+independent evidence such as a strong global identifier. The bounded matcher abstains when
+the candidate set overflows. Closing the registry removes its private database
 and SQLite sidecars.
 
 ## Operational constraints

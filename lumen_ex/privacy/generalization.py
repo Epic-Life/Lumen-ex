@@ -1,6 +1,7 @@
 """Age and location generalization that leaves clinical fields untouched."""
 
 from collections.abc import Mapping
+from decimal import Decimal
 import re
 
 from lumen_ex.value_normalization import normalize_age
@@ -57,7 +58,9 @@ class AgeGeneralizer:
             open_band = _AGE_OPEN_BAND.fullmatch(value.strip())
             if open_band and int(open_band.group(1)) == self.elderly_threshold:
                 return value.strip()
-        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        if isinstance(value, bool) or not isinstance(
+            value, (str, int, float, Decimal)
+        ):
             return None
         normalized = normalize_age(value)
         if normalized is None:

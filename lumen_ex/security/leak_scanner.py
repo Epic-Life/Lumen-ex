@@ -77,14 +77,21 @@ class SensitiveDataLeakScanner:
             return False
         return True
 
-    def scan_text(self, text: str, *, filename: str | None = None) -> bool:
+    def scan_text(
+        self,
+        text: str,
+        *,
+        filename: str | None = None,
+        sensitive_values: tuple[str, ...] = (),
+    ) -> bool:
         if not isinstance(text, str):
             return False
         if not self._fits_utf8_limit(text, self.max_file_bytes):
             return False
-        if self._contains_canary(text):
+        canaries = self._sensitive_canaries(sensitive_values)
+        if self._contains_canary(text, canaries):
             return False
-        if filename is not None and self._contains_canary(filename):
+        if filename is not None and self._contains_canary(filename, canaries):
             return False
         result = self._detect(
             {
@@ -106,8 +113,10 @@ class SensitiveDataLeakScanner:
         *,
         headers: tuple[str, ...] = (),
         filename: str | None = None,
+        sensitive_values: tuple[str, ...] = (),
     ) -> bool:
-        if self._contains_canary_value(value):
+        canaries = self._sensitive_canaries(sensitive_values)
+        if self._contains_canary_value(value, canaries):
             return False
         if filename is not None and not self.scan_text("", filename=filename):
             return False
@@ -117,9 +126,19 @@ class SensitiveDataLeakScanner:
             return False
         return self._detect(fields_for_scan, headers=headers).identifier_count == 0
 
-    def scan_artifact_text(self, text: str, *, filename: str) -> bool:
+    def scan_artifact_text(
+        self,
+        text: str,
+        *,
+        filename: str,
+        sensitive_values: tuple[str, ...] = (),
+    ) -> bool:
         scan_text = _JSON_SHA256_FIELD.sub(r"\1[SHA256]\2", text)
-        if not self.scan_text(scan_text, filename=filename):
+        if not self.scan_text(
+            scan_text,
+            filename=filename,
+            sensitive_values=sensitive_values,
+        ):
             return False
         suffix = Path(filename).suffix.casefold()
         if suffix == ".json":
@@ -129,7 +148,11 @@ class SensitiveDataLeakScanner:
                 payload = json.loads(text)
             except (json.JSONDecodeError, RecursionError):
                 return False
-            return self.scan_value(payload, filename=filename)
+            return self.scan_value(
+                payload,
+                filename=filename,
+                sensitive_values=sensitive_values,
+            )
         if suffix == ".jsonl":
             item_count = 0
             for line in text.splitlines():
@@ -144,7 +167,11 @@ class SensitiveDataLeakScanner:
                     payload = json.loads(line)
                 except (json.JSONDecodeError, RecursionError):
                     return False
-                if not self.scan_value(payload, filename=filename):
+                if not self.scan_value(
+                    payload,
+                    filename=filename,
+                    sensitive_values=sensitive_values,
+                ):
                     return False
             return True
         if suffix in {".csv", ".tsv"}:
@@ -164,7 +191,12 @@ class SensitiveDataLeakScanner:
             headers = tuple(raw_headers)
             if len(headers) > _MAX_STRUCTURED_ITEMS:
                 return False
-            if not self.scan_value({}, headers=headers, filename=filename):
+            if not self.scan_value(
+                {},
+                headers=headers,
+                filename=filename,
+                sensitive_values=sensitive_values,
+            ):
                 return False
             item_count = len(headers)
             try:
@@ -176,7 +208,10 @@ class SensitiveDataLeakScanner:
                     ):
                         return False
                     for header, cell in zip(headers, row):
-                        if not self.scan_value({header: cell}):
+                        if not self.scan_value(
+                            {header: cell},
+                            sensitive_values=sensitive_values,
+                        ):
                             return False
             except csv.Error:
                 return False
@@ -333,11 +368,31 @@ class SensitiveDataLeakScanner:
     def _raise_walk_error(error: OSError) -> None:
         raise error
 
-    def _contains_canary(self, text: str) -> bool:
-        folded = text.casefold()
-        return any(canary in folded for canary in self._canaries)
+    def _sensitive_canaries(
+        self, sensitive_values: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                self._canaries
+                + tuple(
+                    value.casefold()
+                    for value in sensitive_values
+                    if isinstance(value, str) and len(value) >= 4
+                )
+            )
+        )
 
-    def _contains_canary_value(self, value: object) -> bool:
+    def _contains_canary(
+        self, text: str, canaries: tuple[str, ...] | None = None
+    ) -> bool:
+        folded = text.casefold()
+        return any(canary in folded for canary in (canaries or self._canaries))
+
+    def _contains_canary_value(
+        self,
+        value: object,
+        canaries: tuple[str, ...] | None = None,
+    ) -> bool:
         pending = [value]
         visited: set[int] = set()
         item_count = 0
@@ -347,7 +402,7 @@ class SensitiveDataLeakScanner:
             if item_count > _MAX_STRUCTURED_ITEMS:
                 return True
             if isinstance(item, str):
-                if self._contains_canary(item):
+                if self._contains_canary(item, canaries):
                     return True
             elif isinstance(item, dict):
                 identity = id(item)
@@ -355,7 +410,7 @@ class SensitiveDataLeakScanner:
                     continue
                 visited.add(identity)
                 for key, child in item.items():
-                    if self._contains_canary(str(key)):
+                    if self._contains_canary(str(key), canaries):
                         return True
                     pending.append(child)
             elif isinstance(item, (list, tuple)):

@@ -3,6 +3,7 @@
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from decimal import Decimal
 import math
 from pathlib import PurePosixPath
 import re
@@ -199,9 +200,7 @@ class PrivacyTransformer:
         self._integrity_validator.validate(original_fields, fields)
 
         structure = self._safe_structure(record, item.detection.findings)
-        output_relative_path = self._output_relative_path(
-            record, item.detection.findings
-        )
+        output_relative_path = self._output_relative_path(record, item.detection.findings)
         _verify_findings_removed(
             item.detection.findings,
             fields,
@@ -290,8 +289,8 @@ class PrivacyTransformer:
             )
             text = _rewrite_text(value, value_findings, self._age_generalizer)
             return self._date_shifter.shift_text(text, patient_reference)
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            if isinstance(value, float) and not math.isfinite(value):
+        if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
+            if isinstance(value, (float, Decimal)) and not math.isfinite(value):
                 raise ProcessingError("invalid_record")
             text = str(value)
             value_findings = tuple(
@@ -305,6 +304,7 @@ class PrivacyTransformer:
                 return sanitized
             if path and _KEY_NORMALIZER.sub("", path[-1].casefold()) in _AGE_KEYS:
                 return self._age_generalizer.generalize(value)
+            return value
         if isinstance(value, bool) and path and (
             _KEY_NORMALIZER.sub("", path[-1].casefold()) in _AGE_KEYS
         ):
@@ -331,24 +331,24 @@ class PrivacyTransformer:
                 if finding.channel is DetectionChannel.HEADER
                 and finding.source_key == f"@header/{index}"
             )
-            output_headers.append(_rewrite_text(header, header_findings, self._age_generalizer))
+            output_headers.append(
+                _rewrite_text(header, header_findings, self._age_generalizer)
+            )
         return {"headers": output_headers}
 
-    @staticmethod
     def _output_relative_path(
+        self,
         record: NormalizedRecord,
-        findings: tuple[DetectionFinding, ...],
+        findings: Sequence[DetectionFinding],
     ) -> str:
         source_path = PurePosixPath(record.source.relative_path.replace("\\", "/"))
-        has_filename_pii = any(
-            finding.channel is DetectionChannel.FILENAME for finding in findings
-        )
-        if not has_filename_pii:
-            return "sanitized/" + source_path.as_posix()
-        suffix = source_path.suffix
-        if not re.fullmatch(r"\.[A-Za-z0-9]{1,10}", suffix):
+        if not any(finding.channel is DetectionChannel.FILENAME for finding in findings):
+            return f"sanitized/{source_path}"
+        suffix = source_path.suffix.casefold()
+        if suffix not in {".csv", ".tsv", ".txt", ".json"}:
             suffix = ".dat"
-        return f"sanitized/file_{record.source.sha256[:16]}{suffix}"
+        token = self._pseudonymizer.filename_token(record.source.sha256)
+        return f"sanitized/file_{token}{suffix}"
 
 
 def _rewrite_text(

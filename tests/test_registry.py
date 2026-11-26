@@ -161,6 +161,34 @@ class EncryptedIdentityRegistryTests(unittest.TestCase):
             self.assertEqual(invalid.exception.code, "registry_data_invalid")
             self.assertNotIn("synthetic authenticated value", str(invalid.exception))
 
+    def test_identity_mapping_uses_document_locator_for_nested_fhir_identity(self) -> None:
+        with EncryptedIdentityRegistry.temporary(
+            _SECRET, Path(self.parent.name)
+        ) as registry:
+            patient_id = registry.create_patient(_SOURCE_SHA, "doc")
+            registry.add_record_mapping(
+                _SOURCE_SHA, "doc", patient_id, IdentityDecision.CREATE, 1.0
+            )
+            identity = PatientIdentity(
+                source_file="registration/synthetic.json",
+                record_locator="/entry/0/resource",
+                hospital_identifier=(
+                    IdentityValue("HOSP-TEST-9", "HOSPTEST9", "identifier"),
+                ),
+            )
+
+            registry.add_identity(
+                patient_id,
+                _SOURCE_SHA,
+                identity,
+                record_locator="doc",
+            )
+
+            self.assertEqual(
+                registry.find_candidates("hospital_identifier", "HOSPTEST9"),
+                (patient_id,),
+            )
+
     def test_internal_patient_ids_are_repeatable_for_the_same_secret_and_record(self) -> None:
         first = EncryptedIdentityRegistry.temporary(_SECRET, Path(self.parent.name))
         second = EncryptedIdentityRegistry.temporary(_SECRET, Path(self.parent.name))

@@ -189,9 +189,11 @@ class EncryptedIdentityRegistry:
         source_sha256: str,
         identity: PatientIdentity,
         namespace: str = "",
+        record_locator: str | None = None,
     ) -> None:
         """Encrypt extracted identity values and add keyed exact-value blocks."""
-        record_key = self._record_key(source_sha256, identity.record_locator)
+        locator = record_locator if record_locator is not None else identity.record_locator
+        record_key = self._record_key(source_sha256, locator)
         if not self._patient_exists(patient_id):
             raise ProcessingError("registry_reference_invalid")
         mapping = self._execute(

@@ -37,6 +37,23 @@ class SensitiveDataLeakScannerTests(unittest.TestCase):
         self.assertTrue(self.scanner.scan_value({"metadata": "safe"}))
         self.assertNotIn(_CANARY, repr(self.scanner))
 
+    def test_scans_release_artifacts_against_file_scoped_sensitive_values(self) -> None:
+        sensitive_value = "SYNTHETIC-PATIENT-IDENTIFIER-71"
+        self.assertFalse(
+            self.scanner.scan_artifact_text(
+                json.dumps({"note": f"Reference {sensitive_value}"}),
+                filename="records.json",
+                sensitive_values=(sensitive_value,),
+            )
+        )
+        self.assertTrue(
+            self.scanner.scan_artifact_text(
+                json.dumps({"note": "Clinical text without identifiers"}),
+                filename="records.json",
+                sensitive_values=(sensitive_value,),
+            )
+        )
+
     def test_scans_structured_json_keys_csv_headers_and_values(self) -> None:
         self.assertFalse(
             self.scanner.scan_artifact_text(

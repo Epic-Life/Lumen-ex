@@ -42,11 +42,11 @@ def normalize_date(value: str | date | datetime) -> str | None:
             continue
         if date_format in {"%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"}:
             first, second = _date_components(text, date_format)
-            if first <= 12 and second <= 12:
+            if first <= 12 and second <= 12 and first != second:
                 return None
         elif date_format in {"%m/%d/%Y", "%m-%d-%Y"}:
             first, second = _date_components(text, date_format)
-            if first <= 12 and second <= 12:
+            if first <= 12 and second <= 12 and first != second:
                 return None
         return parsed.isoformat()
     return None

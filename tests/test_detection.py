@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import unittest
 
@@ -80,6 +81,28 @@ class MultilingualPIIDetectorTests(unittest.TestCase):
         self.assertIn((DetectionEntityType.RELATIVE_NAME, "Ramesh"), pairs)
         self.assertIn((DetectionEntityType.PATIENT_NAME, "Arif"), pairs)
         self.assertNotIn((DetectionEntityType.RELATIVE_NAME, "fever"), pairs)
+
+    def test_detects_unlabeled_latin_names_and_excludes_clinician_context(self) -> None:
+        normalized = NormalizedRecord(
+            source=_source("notes/visit.txt", InputFormat.TEXT),
+            locator="doc",
+            fields={
+                "text": (
+                    "Visit completed for Asha Sharma. "
+                    "Dr. Ramesh Kumar reviewed the medication."
+                )
+            },
+        )
+
+        result = self.detector.detect(normalized)
+        names = {
+            finding.value
+            for finding in result.findings
+            if finding.entity_type is DetectionEntityType.PATIENT_NAME
+        }
+
+        self.assertIn("Asha Sharma", names)
+        self.assertNotIn("Dr. Ramesh Kumar", names)
 
     def test_detects_fragmented_patient_and_relative_name(self) -> None:
         normalized = NormalizedRecord(
@@ -168,6 +191,97 @@ class MultilingualPIIDetectorTests(unittest.TestCase):
 
         self.assertIn(DetectionEntityType.AADHAAR, found_types)
         self.assertIn(DetectionEntityType.INSURANCE_ID, found_types)
+
+    def test_detects_single_token_names_in_explicit_fields_and_short_mrns(self) -> None:
+        normalized = PatientIdentityNormalizer().normalize(
+            ParsedRecord(
+                _source("records/identity.json", InputFormat.JSON),
+                "/records/0",
+                {"patient_name": "Ravi", "MRN": "A1", "Ravi": "metadata"},
+                {"headers": ("Ravi", "MRN")},
+            )
+        )
+
+        result = self.detector.detect(normalized)
+        detected = {
+            (finding.entity_type, finding.channel, finding.value)
+            for finding in result.findings
+        }
+
+        self.assertIn(
+            (
+                DetectionEntityType.PATIENT_NAME,
+                DetectionChannel.VALUE,
+                "Ravi",
+            ),
+            detected,
+        )
+        self.assertIn(
+            (
+                DetectionEntityType.PATIENT_NAME,
+                DetectionChannel.HEADER,
+                "Ravi",
+            ),
+            detected,
+        )
+        self.assertIn(
+            (
+                DetectionEntityType.PATIENT_NAME,
+                DetectionChannel.KEY,
+                "Ravi",
+            ),
+            detected,
+        )
+        self.assertIn(
+            (
+                DetectionEntityType.MEDICAL_RECORD_NUMBER,
+                DetectionChannel.VALUE,
+                "A1",
+            ),
+            detected,
+        )
+
+    def test_detects_file_scoped_identity_names_in_headers_and_keys(self) -> None:
+        normalized = NormalizedRecord(
+            source=_source("records/file.csv", InputFormat.CSV),
+            locator="row:1",
+            fields={"Asha Sharma": "metadata", "diagnosis": "hypertension"},
+            structure={"headers": ("Asha Sharma", "diagnosis")},
+        )
+
+        result = self.detector.detect(
+            normalized,
+            known_names=("Asha Sharma",),
+        )
+
+        self.assertTrue(
+            any(
+                finding.entity_type is DetectionEntityType.PATIENT_NAME
+                and finding.channel is DetectionChannel.HEADER
+                for finding in result.findings
+            )
+        )
+
+    def test_quarantines_printable_base64_payloads_but_ignores_binary_blobs(self) -> None:
+        encoded_text = base64.b64encode(
+            b"Patient Name: Synthetic Sample\nMRN: A1"
+        ).decode("ascii")
+        text_record = NormalizedRecord(
+            source=_source("records/attachment.json", InputFormat.JSON),
+            locator="doc",
+            fields={"attachment_data": encoded_text},
+        )
+        with self.assertRaises(ProcessingError) as error:
+            self.detector.detect(text_record)
+        self.assertEqual(error.exception.code, "unsupported_format")
+
+        encoded_binary = base64.b64encode(bytes(range(1, 33))).decode("ascii")
+        binary_record = NormalizedRecord(
+            source=_source("records/image.json", InputFormat.JSON),
+            locator="doc",
+            fields={"attachment_data": encoded_binary},
+        )
+        self.assertEqual(self.detector.detect(binary_record).findings, ())
 
     def test_does_not_flag_clinician_names_or_common_clinical_content(self) -> None:
         clinical = (

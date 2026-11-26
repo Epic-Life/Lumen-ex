@@ -88,6 +88,7 @@ class ReleasePipeline:
             file_results: list[FileWriteResult] = []
             report_files: list[OutputManifestEntry] = []
             records_quarantined = 0
+            records_suppressed = 0
             exported_record_keys: set[tuple[str, str]] = set()
             exported_patient_keys: set[tuple[str, str]] = set()
             for outcome in ingestion.files:
@@ -121,13 +122,23 @@ class ReleasePipeline:
                 file_result = writer.write_file(
                     source,
                     tuple(
-                        ReleaseRecord(item.parsed, item.normalized, item.result)
+                        ReleaseRecord(
+                            item.parsed,
+                            item.normalized,
+                            item.result,
+                            _sensitive_values(item),
+                        )
                         for item in file_records
                     ),
                 )
                 file_results.append(file_result)
                 report_files.append(file_result.manifest)
                 records_quarantined += file_result.records_quarantined
+                if file_result.manifest.status is not ProcessingStatus.QUARANTINED:
+                    records_suppressed += sum(
+                        item.result.status is ProcessingStatus.SUPPRESSED
+                        for item in file_records
+                    )
                 for entry in file_result.records:
                     key = (source.relative_path, str(entry["loc"]))
                     exported_record_keys.add(key)
@@ -139,16 +150,7 @@ class ReleasePipeline:
                 for result in file_results
                 for record in result.records
             )
-            linked_count = sum(
-                1
-                for item in prepared
-                if item.linked
-                and (
-                    item.parsed.source.relative_path,
-                    item.parsed.locator,
-                )
-                in exported_patient_keys
-            )
+            linked_count = len(exported_patient_keys)
             generalized_count = sum(
                 1
                 for item in prepared
@@ -168,10 +170,7 @@ class ReleasePipeline:
                 ),
                 records_linked=linked_count,
                 records_generalized=generalized_count,
-                records_suppressed=sum(
-                    item.result.status is ProcessingStatus.SUPPRESSED
-                    for item in prepared
-                ),
+                records_suppressed=records_suppressed,
                 records_quarantined=records_quarantined,
                 seconds=round(time.monotonic() - started, 2),
                 peak_rss_mb=_peak_rss_mb(),
@@ -223,13 +222,34 @@ class ReleasePipeline:
     ) -> tuple[_PreparedRecord, ...]:
         normalizer = PatientIdentityNormalizer()
         detector = MultilingualPIIDetector()
-        matcher = IdentityMatcher(registry)
+        matchers: dict[str, IdentityMatcher] = {}
         transformer = PrivacyTransformer(self.secret, self.config)
         prepared: list[_PreparedRecord] = []
         privacy_inputs: list[PrivacyInput] = []
         privacy_indices: list[int] = []
+        normalized_by_record: dict[tuple[str, str], NormalizedRecord] = {}
+        normalization_errors: dict[tuple[str, str], str] = {}
+        names_by_file: dict[str, set[str]] = defaultdict(set)
 
         for parsed in records:
+            key = (parsed.source.relative_path, parsed.locator)
+            try:
+                normalized = normalizer.normalize(parsed)
+            except ProcessingError as error:
+                normalization_errors[key] = error.code
+                continue
+            except Exception:
+                normalization_errors[key] = "internal_error"
+                continue
+            normalized_by_record[key] = normalized
+            names_by_file[parsed.source.relative_path].update(
+                value.original
+                for identity in normalized.identities
+                for value in identity.name
+            )
+
+        for parsed in records:
+            key = (parsed.source.relative_path, parsed.locator)
             normalized = NormalizedRecord(
                 source=parsed.source,
                 locator=parsed.locator,
@@ -239,13 +259,21 @@ class ReleasePipeline:
             linkage = LinkageDecision(LinkageAction.ABSTAIN)
             linked = False
             try:
-                normalized = normalizer.normalize(parsed)
-                detection = detector.detect(normalized)
+                if key in normalization_errors:
+                    raise ProcessingError(normalization_errors[key])
+                normalized = normalized_by_record[key]
+                detection = detector.detect(
+                    normalized,
+                    known_names=tuple(
+                        sorted(names_by_file[parsed.source.relative_path])
+                    ),
+                )
                 for entity, count in detection.entity_counts.items():
                     entity_counts[entity] = entity_counts.get(entity, 0) + count
-                linkage, linked = self._link_record(
-                    normalized, matcher, registry
-                )
+                namespace = parsed.source.sha256
+                if namespace not in matchers:
+                    matchers[namespace] = IdentityMatcher(registry, hospital_namespace=namespace)
+                linkage, linked = self._link_record(normalized, matchers[namespace], registry)
                 privacy_indices.append(len(prepared))
                 privacy_inputs.append(PrivacyInput(normalized, detection, linkage))
                 prepared.append(
@@ -351,6 +379,8 @@ class ReleasePipeline:
             patient_id,
             record.source.sha256,
             identity,
+            namespace=matcher.hospital_namespace,
+            record_locator=record.locator,
         )
         return (
             LinkageDecision(LinkageAction.LINK, patient_id),
@@ -417,3 +447,28 @@ def _peak_rss_mb() -> float:
         raise ProcessingError("internal_error") from None
     divisor = 1024 * 1024 if platform.system() == "Darwin" else 1024
     return round(peak_rss / divisor, 1)
+
+
+def _sensitive_values(item: _PreparedRecord) -> tuple[str, ...]:
+    values = {
+        finding.value
+        for finding in item.detection.findings
+        if len(finding.value) >= 4
+    }
+    for identity in item.normalized.identities:
+        for field_name in (
+            "date_of_birth",
+            "phone",
+            "email",
+            "address",
+            "location",
+            "hospital_identifier",
+            "insurance_identifier",
+            "government_identifier",
+        ):
+            values.update(
+                field_value.original
+                for field_value in getattr(identity, field_name)
+                if len(field_value.original) >= 4
+            )
+    return tuple(sorted(values))

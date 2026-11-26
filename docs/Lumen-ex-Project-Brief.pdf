@@ -1,0 +1,127 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Count 2 /Kids [5 0 R 7 0 R] >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 3348 >>
+stream
+0.07 0.15 0.26 rg 0 715 595.28 127 re f
+BT /F2 11 Tf 0.67 0.94 0.89 rg 1 0 0 1 48 807 Tm (SECRET WARDS  /  DEVFORGE TRACK 3) Tj ET
+BT /F2 33 Tf 1 1 1 rg 1 0 0 1 48 768 Tm (Lumen-ex) Tj ET
+BT /F1 12 Tf 1 1 1 rg 1 0 0 1 49 741 Tm (An offline privacy firewall for multilingual clinical data) Tj ET
+0.89 0.96 0.95 rg 48 55 499 1 re f
+BT /F2 10 Tf 0.31 0.39 0.48 rg 1 0 0 1 48 36 Tm (LUMEN-EX  /  PROJECT BRIEF) Tj ET
+BT /F2 10 Tf 0.31 0.39 0.48 rg 1 0 0 1 510 36 Tm (1 / 2) Tj ET
+BT /F2 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 686 Tm (Team  Sujal Patel and Uniqueone222 \(repository contributor names\)) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 667 Tm (Repository  github.com/SUJALSPATEL/Lumen-ex) Tj ET
+BT /F2 15 Tf 0.03 0.42 0.40 rg 1 0 0 1 48 631 Tm (1  Overview) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 610 Tm (Mixed hospital exports contain sensitive identity clues in English, Hindi and Hinglish.) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 595 Tm (Lumen-ex links evidence across scripts, protects direct identifiers, and checks recognized) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 580 Tm (clinical values before writing a research release. It runs offline on CPU using) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 565 Tm (deterministic rules and keyed cryptography.) Tj ET
+BT /F2 15 Tf 0.03 0.42 0.40 rg 1 0 0 1 48 535 Tm (2  Architecture) Tj ET
+0.89 0.96 0.95 rg 48 486 499 25 re f
+BT /F2 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 59 494 Tm (Input files  >  stable discovery, hash and parse) Tj ET
+0.89 0.96 0.95 rg 48 461 499 25 re f
+BT /F2 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 59 469 Tm (Normalize  >  multilingual detection  >  encrypted identity matching) Tj ET
+0.89 0.96 0.95 rg 48 436 499 25 re f
+BT /F2 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 59 444 Tm (Keyed pseudonyms, date shifts and cohort privacy  >  leak scan) Tj ET
+0.89 0.96 0.95 rg 48 411 499 25 re f
+BT /F2 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 59 419 Tm (Validate and release  >  sanitized/ + report.json + records.jsonl) Tj ET
+BT /F2 15 Tf 0.03 0.42 0.40 rg 1 0 0 1 48 379 Tm (3  Method and security) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 358 Tm (CSV, TSV, JSON, FHIR and notes share one pipeline. Detectors inspect labeled fields, text,) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 343 Tm (headers and keys. Indic transliteration helps compare name variants. A bounded matcher) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 328 Tm (checks independent evidence and abstains on conflicts or sparse records. The run secret) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 313 Tm (derives separate keys for HMAC identifiers, date offsets and an authenticated-encrypted) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 298 Tm (SQLite identity registry.) Tj ET
+BT /F2 15 Tf 0.03 0.42 0.40 rg 1 0 0 1 48 268 Tm (4  What distinguishes Lumen-ex) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 247 Tm (The pipeline checks clinical integrity alongside identifier removal. Cohort policy) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 232 Tm (generalizes age and home geography and can suppress an unsafe record. Output scanners gate) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 217 Tm (serialized artifacts and mappings. The report records failed files by digest and logs) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 202 Tm (contain counts or safe codes.) Tj ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 3900 >>
+stream
+0.07 0.15 0.26 rg 0 715 595.28 127 re f
+BT /F2 11 Tf 0.67 0.94 0.89 rg 1 0 0 1 48 807 Tm (SECRET WARDS  /  DEVFORGE TRACK 3) Tj ET
+BT /F2 33 Tf 1 1 1 rg 1 0 0 1 48 768 Tm (Release evidence) Tj ET
+BT /F1 12 Tf 1 1 1 rg 1 0 0 1 49 741 Tm (Practice results, synthetic attack and remaining risks) Tj ET
+0.89 0.96 0.95 rg 48 55 499 1 re f
+BT /F2 10 Tf 0.31 0.39 0.48 rg 1 0 0 1 48 36 Tm (LUMEN-EX  /  PROJECT BRIEF) Tj ET
+BT /F2 10 Tf 0.31 0.39 0.48 rg 1 0 0 1 510 36 Tm (2 / 2) Tj ET
+BT /F2 15 Tf 0.03 0.42 0.40 rg 1 0 0 1 48 678 Tm (5  Measured practice results) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 657 Tm (Team Kit data, 200 hash-verified inputs. The official output validator passed. The self-) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 642 Tm (check counted 49/3,230 identifier matches, including filename matches on quarantined) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 627 Tm (inputs. A separate export-only check found five labeled matches across content and) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 612 Tm (metadata.) Tj ET
+0.89 0.96 0.95 rg 48 553 499 22 re f
+BT /F1 10.5 Tf 0.13 0.20 0.29 rg 1 0 0 1 57 560 Tm (Files exported / quarantined / suppressed) Tj ET
+BT /F2 10.5 Tf 0.13 0.20 0.29 rg 1 0 0 1 364 560 Tm (41 / 158 / 1) Tj ET
+0.89 0.96 0.95 rg 48 530 499 22 re f
+BT /F1 10.5 Tf 0.13 0.20 0.29 rg 1 0 0 1 57 537 Tm (Self-check personal data / Latin / Hindi / Hinglish) Tj ET
+BT /F2 10.5 Tf 0.13 0.20 0.29 rg 1 0 0 1 364 537 Tm (1.5% / 1.6% / 0.0% / 0.0%) Tj ET
+0.89 0.96 0.95 rg 48 507 499 22 re f
+BT /F1 10.5 Tf 0.13 0.20 0.29 rg 1 0 0 1 57 514 Tm (Practice canaries / unsupported raw copies) Tj ET
+BT /F2 10.5 Tf 0.13 0.20 0.29 rg 1 0 0 1 364 514 Tm (0 of 4 / 0) Tj ET
+0.89 0.96 0.95 rg 48 484 499 22 re f
+BT /F1 10.5 Tf 0.13 0.20 0.29 rg 1 0 0 1 57 491 Tm (Medical values found in released files) Tj ET
+BT /F2 10.5 Tf 0.13 0.20 0.29 rg 1 0 0 1 364 491 Tm (362 of 414 \(87.4%\)) Tj ET
+0.89 0.96 0.95 rg 48 461 499 22 re f
+BT /F1 10.5 Tf 0.13 0.20 0.29 rg 1 0 0 1 57 468 Tm (Medical labels found across all practice inputs) Tj ET
+BT /F2 10.5 Tf 0.13 0.20 0.29 rg 1 0 0 1 364 468 Tm (362 of 4,855 \(7.5%\)) Tj ET
+0.89 0.96 0.95 rg 48 438 499 22 re f
+BT /F1 10.5 Tf 0.13 0.20 0.29 rg 1 0 0 1 57 445 Tm (Pairwise precision / recall / F0.5) Tj ET
+BT /F2 10.5 Tf 0.13 0.20 0.29 rg 1 0 0 1 364 445 Tm (1.00 / 0.02 / 0.08) Tj ET
+0.89 0.96 0.95 rg 48 415 499 22 re f
+BT /F1 10.5 Tf 0.13 0.20 0.29 rg 1 0 0 1 57 422 Tm (Two-CPU Windows practice run / peak RSS) Tj ET
+BT /F2 10.5 Tf 0.13 0.20 0.29 rg 1 0 0 1 364 422 Tm (24.65 s / 52.9 MB) Tj ET
+BT /F2 15 Tf 0.03 0.42 0.40 rg 1 0 0 1 48 388 Tm (Independent synthetic test) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 367 Tm (The release retained 10 of 12 records, 70 of 70 clinical fields in retained records and all) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 352 Tm (five two-day stays. An independently specified voter-style population and visit facts) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 337 Tm (uniquely matched five of ten released records via retained evidence, with zero false) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 322 Tm (matches. Requiring exact visit dates blocked the successful claims in this fixture.) Tj ET
+BT /F2 15 Tf 0.03 0.42 0.40 rg 1 0 0 1 48 292 Tm (6  Known limitations) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 271 Tm (Ambiguous dates and fail-closed file scanning cause heavy losses. Rare conditions, hospital) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 256 Tm (context, preserved stays and stable pseudonyms remain useful to an attacker. Some unlabeled) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 241 Tm (identifiers survive. The synthetic fixture is small and the hidden evaluator has not been) Tj ET
+BT /F1 11 Tf 0.13 0.20 0.29 rg 1 0 0 1 48 226 Tm (run. The practice release needs further work before handling real patient data.) Tj ET
+endstream
+endobj
+9 0 obj
+<< /Title (Lumen-ex Project Brief) /Author (Lumen-ex) >>
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000224 00000 n 
+0000000326 00000 n 
+0000000468 00000 n 
+0000003868 00000 n 
+0000004010 00000 n 
+0000007962 00000 n 
+trailer
+<< /Size 10 /Root 1 0 R /Info 9 0 R >>
+startxref
+8034
+%%EOF

@@ -1,4 +1,5 @@
 import csv
+from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
@@ -89,7 +90,10 @@ class SanitizedOutputWriterTests(unittest.TestCase):
             output_root = root / "output"
             input_root.mkdir()
             (output_root / "sanitized").mkdir(parents=True)
-            raw = b'{"visits":[{"diagnosis":"discarded"},{"diagnosis":"stable"}]}'
+            raw = (
+                b'{"_export_meta":{"source_path":"inbound/synthetic_marker_854.json"},'
+                b'"visits":[{"diagnosis":"discarded"},{"diagnosis":"stable"}]}'
+            )
             (input_root / "visits.json").write_bytes(raw)
             source = _metadata("visits.json", raw)
             first = ParsedRecord(
@@ -132,6 +136,9 @@ class SanitizedOutputWriterTests(unittest.TestCase):
                 [{"diagnosis": "stable"}],
             )
             self.assertEqual((input_root / "visits.json").read_bytes(), raw)
+            sanitized = (output_root / "sanitized/visits.json").read_text(encoding="utf-8")
+            self.assertEqual(json.loads(sanitized)["_export_meta"]["source_path"], "[REDACTED]")
+            self.assertNotIn("synthetic_marker_854", sanitized)
 
     def test_fhir_patient_pseudonym_preserves_bundle_reference(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -246,6 +253,104 @@ class SanitizedOutputWriterTests(unittest.TestCase):
             self.assertEqual(written.manifest.reason, "format_mismatch")
             self.assertFalse((output_root / "sanitized" / "duplicate.csv").exists())
 
+    def test_merges_header_redactions_across_records_and_preserves_column_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_root = root / "input"
+            output_root = root / "output"
+            input_root.mkdir()
+            (output_root / "sanitized").mkdir(parents=True)
+            raw = b"Mina Rao,diagnosis\nrecord_1,hypertension\nrecord_2,diabetes\n"
+            (input_root / "headers.csv").write_bytes(raw)
+            source = _metadata("headers.csv", raw)
+            headers = ("Mina Rao", "diagnosis")
+            records = []
+            for index, (name, diagnosis, output_headers) in enumerate(
+                (
+                    ("record_1", "hypertension", ["Mina Rao", "diagnosis"]),
+                    ("record_2", "diabetes", ["[REDACTED]", "diagnosis"]),
+                )
+            ):
+                parsed = ParsedRecord(
+                    source,
+                    f"row:{index}",
+                    {"Mina Rao": name, "diagnosis": diagnosis},
+                    {
+                        "headers": headers,
+                        "cells": (name, diagnosis),
+                    },
+                )
+                normalized = PatientIdentityNormalizer().normalize(parsed)
+                result = SanitizationResult(
+                    ProcessingStatus.SANITIZED,
+                    f"row:{index}",
+                    {"Mina Rao": name, "diagnosis": diagnosis},
+                    output_structure={"headers": output_headers},
+                    output_relative_path="sanitized/headers.csv",
+                )
+                records.append(ReleaseRecord(parsed, normalized, result))
+            scanner = SensitiveDataLeakScanner(canaries=("Mina Rao",))
+
+            written = SanitizedOutputWriter(
+                input_root, output_root, scanner
+            ).write_file(source, records)
+
+            self.assertEqual(written.manifest.status, ProcessingStatus.SANITIZED)
+            output = (output_root / "sanitized" / "headers.csv").read_text(
+                encoding="utf-8"
+            )
+            self.assertNotIn("Mina Rao", output)
+            self.assertIn("field_1,diagnosis", output)
+            self.assertIn("record_1,hypertension", output)
+            self.assertIn("record_2,diabetes", output)
+
+    def test_anonymizes_header_containing_unlabeled_identifier(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_root = root / "input"
+            output_root = root / "output"
+            input_root.mkdir()
+            (output_root / "sanitized").mkdir(parents=True)
+            raw = (
+                b"Asha ZXCV12345678,diagnosis\n"
+                b"stable,hypertension\n"
+            )
+            (input_root / "header.csv").write_bytes(raw)
+            source = _metadata("header.csv", raw)
+            parsed = ParsedRecord(
+                source,
+                "row:0",
+                {"Asha ZXCV12345678": "stable", "diagnosis": "hypertension"},
+                {
+                    "headers": ("Asha ZXCV12345678", "diagnosis"),
+                    "cells": ("stable", "hypertension"),
+                },
+            )
+            normalized = PatientIdentityNormalizer().normalize(parsed)
+            result = SanitizationResult(
+                ProcessingStatus.SANITIZED,
+                "row:0",
+                {"Asha ZXCV12345678": "stable", "diagnosis": "hypertension"},
+                output_structure={
+                    "headers": ["Asha ZXCV12345678", "diagnosis"]
+                },
+                output_relative_path="sanitized/header.csv",
+            )
+
+            written = SanitizedOutputWriter(
+                input_root, output_root, SensitiveDataLeakScanner()
+            ).write_file(
+                source, [ReleaseRecord(parsed, normalized, result)]
+            )
+
+            self.assertEqual(written.manifest.status, ProcessingStatus.SANITIZED)
+            with (output_root / "sanitized" / "header.csv").open(
+                encoding="utf-8", newline=""
+            ) as stream:
+                rows = list(csv.reader(stream))
+            self.assertEqual(rows[0], ["field_1", "diagnosis"])
+            self.assertEqual(rows[1], ["stable", "hypertension"])
+
     def test_release_pipeline_writes_scanned_cohort_and_valid_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -282,7 +387,9 @@ class SanitizedOutputWriterTests(unittest.TestCase):
             self.assertTrue(scanner.scan_tree(output_root / "sanitized"))
             records = [json.loads(line) for line in record_lines]
             self.assertTrue(all(record["patient"] for record in records))
-            self.assertTrue(all(record["file"] == "sanitized/cohort.csv" for record in records))
+            output_name = records[0]["file"]
+            self.assertEqual(output_name, "sanitized/cohort.csv")
+            self.assertTrue(all(record["file"] == output_name for record in records))
             OutputContractValidator().validate(
                 output_root, report.files, records, report_data
             )
@@ -295,12 +402,113 @@ class SanitizedOutputWriterTests(unittest.TestCase):
                 SensitiveDataLeakScanner(canaries=("test-secret",)),
             ).run()
             self.assertEqual(
-                (output_root / "sanitized" / "cohort.csv").read_bytes(),
-                (second_output / "sanitized" / "cohort.csv").read_bytes(),
+                (output_root / output_name).read_bytes(),
+                (second_output / output_name).read_bytes(),
             )
             self.assertEqual(
                 (output_root / "records.jsonl").read_bytes(),
                 (second_output / "records.jsonl").read_bytes(),
+            )
+            third_output = root / "output-different-secret"
+            ReleasePipeline(
+                input_root,
+                third_output,
+                PipelineConfig(),
+                "different-secret",
+                SensitiveDataLeakScanner(canaries=("different-secret",)),
+            ).run()
+            third_records = [
+                json.loads(line)
+                for line in (third_output / "records.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            self.assertEqual(third_records[0]["file"], output_name)
+
+    def test_release_pipeline_preserves_high_precision_json_numbers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_root = root / "input"
+            output_root = root / "output"
+            input_root.mkdir()
+            records = []
+            for index in range(5):
+                records.append(
+                    {
+                        "patient_name": f"Synthetic Patient {index}",
+                        "phone": f"987654321{index}",
+                        "age": 40,
+                        "diagnosis": "hypertension",
+                        "lab_result": "__EXACT_DECIMAL__",
+                    }
+                )
+            raw = json.dumps({"records": records}).replace(
+                '"__EXACT_DECIMAL__"', "123.456789012345678901"
+            )
+            (input_root / "cohort.json").write_text(raw, encoding="utf-8")
+
+            report = ReleasePipeline(
+                input_root,
+                output_root,
+                PipelineConfig(),
+                "test-secret",
+                SensitiveDataLeakScanner(canaries=("test-secret",)),
+            ).run()
+
+            self.assertEqual(report.records_processed, 5)
+            sanitized = json.loads(
+                (
+                    output_root
+                    / json.loads(
+                        (output_root / "records.jsonl")
+                        .read_text(encoding="utf-8")
+                        .splitlines()[0]
+                    )["file"]
+                ).read_text(
+                    encoding="utf-8"
+                ),
+                parse_float=Decimal,
+            )
+            self.assertEqual(
+                [item["lab_result"] for item in sanitized["records"]],
+                [Decimal("123.456789012345678901")] * 5,
+            )
+
+    def test_release_pipeline_anonymizes_unknown_single_word_headers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_root = root / "input"
+            output_root = root / "output"
+            input_root.mkdir()
+            rows = ["Orchid,diagnosis"] + [
+                f"value_{index},hypertension" for index in range(5)
+            ]
+            (input_root / "cohort.csv").write_text(
+                "\n".join(rows) + "\n", encoding="utf-8"
+            )
+
+            report = ReleasePipeline(
+                input_root,
+                output_root,
+                PipelineConfig(),
+                "test-secret",
+                SensitiveDataLeakScanner(canaries=("test-secret",)),
+            ).run()
+
+            self.assertEqual(report.records_processed, 5)
+            output_path = json.loads(
+                (output_root / "records.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()[0]
+            )["file"]
+            with (output_root / output_path).open(
+                encoding="utf-8", newline=""
+            ) as stream:
+                written_rows = list(csv.reader(stream))
+            self.assertEqual(written_rows[0], ["field_1", "diagnosis"])
+            self.assertEqual(
+                [row[0] for row in written_rows[1:]],
+                [f"value_{index}" for index in range(5)],
             )
 
 

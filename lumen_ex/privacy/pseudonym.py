@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import re
 
 from lumen_ex.contracts.models import LinkageAction, LinkageDecision
 from lumen_ex.errors import ProcessingError
@@ -18,6 +19,7 @@ class Pseudonymizer:
         if not isinstance(secret, (str, bytes)) or not secret:
             raise ProcessingError("secret_missing")
         self._key = derive_key(secret, b"patient-pseudonym")
+        self._file_key = derive_key(secret, b"file-name-pseudonym")
 
     def pseudonym_for(self, patient_reference: str) -> str:
         if not isinstance(patient_reference, str) or not patient_reference:
@@ -40,6 +42,17 @@ class Pseudonymizer:
         if decision.patient_reference is None:
             raise ProcessingError("privacy_patient_reference_invalid")
         return self.pseudonym_for(decision.patient_reference)
+
+    def filename_token(self, source_sha256: str) -> str:
+        if not isinstance(source_sha256, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", source_sha256
+        ):
+            raise ProcessingError("invalid_record")
+        return hmac.new(
+            self._file_key,
+            b"lumen-ex/file-name/v1\0" + source_sha256.encode("ascii"),
+            hashlib.sha256,
+        ).hexdigest()[:20]
 
     def __repr__(self) -> str:
         return "Pseudonymizer()"

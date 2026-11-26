@@ -1,8 +1,12 @@
 """Deterministic, context-aware PII detection for normalized records."""
 
 from collections.abc import Mapping
+import base64
+import binascii
+from decimal import Decimal
 import re
 import unicodedata
+from typing import Sequence
 
 from lumen_ex.contracts.models import (
     DetectionChannel,
@@ -11,7 +15,7 @@ from lumen_ex.contracts.models import (
     DetectionResult,
     NormalizedRecord,
 )
-from lumen_ex.detection.indic_names import names_match
+from lumen_ex.detection.indic_names import normalize_name
 from lumen_ex.errors import ProcessingError
 from lumen_ex.identity import (
     normalize_age,
@@ -29,6 +33,24 @@ _MISSING_KEYS = {"", "na", "nil", "none", "null", "unknown"}
 def _compact_key(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold()
     return "".join(character for character in normalized if character.isalnum())
+
+
+def _reject_printable_base64_payload(value: str) -> None:
+    if len(value) < 24 or re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", value) is None:
+        return
+    try:
+        decoded = base64.b64decode(
+            value + "=" * (-len(value) % 4),
+            validate=True,
+        ).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return
+    printable = sum(
+        character.isprintable() or character in "\r\n\t"
+        for character in decoded
+    )
+    if decoded.strip() and printable / len(decoded) >= 0.95:
+        raise ProcessingError("unsupported_format")
 
 
 _NON_PATIENT_CONTEXTS = {
@@ -175,10 +197,12 @@ _KEY_TYPES: dict[DetectionEntityType, frozenset[str]] = {
             "state",
             "location",
             "gaon",
+            "gram",
             "jila",
             "zilla",
             "shehar",
             "गाँव",
+            "ग्राम",
             "जिला",
         }
     ),
@@ -198,6 +222,10 @@ _AADHAAR = re.compile(r"(?<!\d)(?:\d[\s-]?){11}\d(?!\d)")
 _MASKED_AADHAAR = re.compile(r"(?i)(?<!\w)X{4}[\s-]?X{4}[\s-]?\d{4}(?!\w)")
 _ABHA = re.compile(r"(?<!\d)\d{2}-\d{4}-\d{4}-\d{4}(?!\d)")
 _PAN = re.compile(r"(?i)(?<![A-Z0-9])[A-Z]{5}\d{4}[A-Z](?![A-Z0-9])")
+_PREFIXED_RECORD_NUMBER = re.compile(
+    r"(?i)(?<![A-Z0-9])(?:UHID|MRN|IPD|OPD|IP)[-_/]"
+    r"(?:\d{2}[-_/])?\d{3,}(?:-\d{2,})*(?![A-Z0-9])"
+)
 _RELATIVE_NAME = re.compile(
     r"(?<!\w)(?i:s\s*/\s*o|d\s*/\s*o|w\s*/\s*o|k\s*/\s*c\s*/\s*o|"
     r"son\s+of|daughter\s+of|wife\s+of|husband\s+of|care\s+of|c\s*/\s*o|"
@@ -213,7 +241,10 @@ _NAME_BEFORE_RELATIVE = re.compile(
 )
 _HONORIFIC_NAME = re.compile(
     r"(?<!\w)(?P<name>[A-Z][A-Za-z'.’\-]+|[\u0900-\u097f]+)"
-    r"\s+(?i:ji|sahab|sahib|didi|behenji)\b"
+    r"[ \t]+(?P<title>(?i:ji|sahab|sahib|didi|behenji|bhai|babu))\b"
+)
+_PROPER_NAME_SEQUENCE = re.compile(
+    r"(?<![\w])(?P<name>[A-Z][a-z]{1,}(?:[ '-][A-Z][a-z]{1,}){1,2})(?![\w])"
 )
 _NAME_LABELS = (
     "patient full name",
@@ -269,6 +300,8 @@ _EXTRA_LABELS = (
     ("case number", DetectionEntityType.MEDICAL_RECORD_NUMBER),
     ("medical record number", DetectionEntityType.MEDICAL_RECORD_NUMBER),
     ("registration number", DetectionEntityType.MEDICAL_RECORD_NUMBER),
+    ("registration no", DetectionEntityType.MEDICAL_RECORD_NUMBER),
+    ("reg no", DetectionEntityType.MEDICAL_RECORD_NUMBER),
     ("pin code", DetectionEntityType.PIN_CODE),
     ("postal code", DetectionEntityType.PIN_CODE),
     ("zip code", DetectionEntityType.PIN_CODE),
@@ -286,13 +319,13 @@ _FIELD_LABELS: tuple[tuple[str, DetectionEntityType], ...] = tuple(
         reverse=True,
     )
 )
+_LABEL_ALTERNATIVES = "|".join(
+    r"[ \t]+".join(re.escape(part) for part in label.split())
+    for label, _ in _FIELD_LABELS
+)
 _LABEL_PATTERN = re.compile(
-    r"(?im)(?<![\w])(?P<label>"
-    + "|".join(
-        r"\s+".join(re.escape(part) for part in label.split())
-        for label, _ in _FIELD_LABELS
-    )
-    + r")\s*[:：=]\s*(?P<value>[^\r\n,;|]+)"
+    rf"(?im)(?<!\w)(?P<label>{_LABEL_ALTERNATIVES})[ \t]*[:：=][ \t]*"
+    rf"(?P<value>[^\r\n,;|]+?)(?=[\r\n,;|]|$|[ \t]+(?:{_LABEL_ALTERNATIVES})[ \t]*[:：=])"
 )
 _PIN_LABEL = re.compile(
     r"(?i)(?<!\w)(?:pin(?:\s*code)?|postal(?:\s*code)?|zip(?:\s*code)?)"
@@ -300,6 +333,8 @@ _PIN_LABEL = re.compile(
 )
 _COMPLAINT_OR_CLINICAL_TERMS = {
     "admission",
+    "capsule",
+    "cap",
     "breathlessness",
     "chest",
     "cold",
@@ -310,9 +345,17 @@ _COMPLAINT_OR_CLINICAL_TERMS = {
     "fever",
     "headache",
     "hypertension",
+    "hospital",
+    "clinic",
+    "laboratory",
+    "inj",
+    "injection",
     "pain",
     "parkinson",
     "rash",
+    "syrup",
+    "tab",
+    "tablet",
     "disease",
     "vomiting",
     "ज्वर",
@@ -338,26 +381,52 @@ _KEY_TYPE_LOOKUP = {
     for entity_type, aliases in _KEY_TYPES.items()
     for alias in aliases
 }
+_LABEL_TYPE_LOOKUP = {
+    _compact_key(alias): entity_type for alias, entity_type in _FIELD_LABELS
+}
 
 
 class MultilingualPIIDetector:
     """Find explicit PII patterns and context-labelled patient attributes offline."""
 
-    def detect(self, record: NormalizedRecord) -> DetectionResult:
+    def detect(
+        self,
+        record: NormalizedRecord,
+        *,
+        known_names: Sequence[str] = (),
+    ) -> DetectionResult:
         findings: list[DetectionFinding] = []
         seen: set[tuple[object, ...]] = set()
-        names = tuple(
-            candidate
+        name_values = [
+            value.original
             for identity in record.identities
             for value in identity.name
-            if (candidate := _clean_name_candidate(value.original)) is not None
+        ]
+        names = tuple(
+            dict.fromkeys(
+                candidate
+                for value in name_values
+                if isinstance(value, str)
+                and (candidate := _clean_name_candidate(value)) is not None
+            )
+        )
+        file_names = tuple(
+            dict.fromkeys(
+                names
+                + tuple(
+                    candidate
+                    for value in known_names
+                    if isinstance(value, str)
+                    and (candidate := _clean_name_candidate(value)) is not None
+                )
+            )
         )
 
         self._scan_text(
             record.source.relative_path,
             "@filename",
             DetectionChannel.FILENAME,
-            names,
+            file_names,
             findings,
             seen,
         )
@@ -369,7 +438,7 @@ class MultilingualPIIDetector:
                         header,
                         f"@header/{index}",
                         DetectionChannel.HEADER,
-                        names,
+                        file_names,
                         findings,
                         seen,
                     )
@@ -411,7 +480,7 @@ class MultilingualPIIDetector:
                         key,
                         _source_key(child_path),
                         DetectionChannel.KEY,
-                        names,
+                        file_names,
                         findings,
                         seen,
                         context=path,
@@ -428,8 +497,10 @@ class MultilingualPIIDetector:
                     stack.append((child, path + (str(index),), depth + 1))
                 continue
 
-            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            if isinstance(value, (str, int, float, Decimal)) and not isinstance(value, bool):
                 text = str(value)
+                if isinstance(value, str):
+                    _reject_printable_base64_payload(value)
                 source_key = _source_key(path)
                 entity_type = _classify_key(path[-1] if path else "", path[:-1])
                 if entity_type is not None:
@@ -440,6 +511,9 @@ class MultilingualPIIDetector:
                         DetectionChannel.VALUE,
                         findings,
                         seen,
+                        allow_short_identifier=_is_explicit_identifier_source(
+                            source_key
+                        ),
                     )
                 self._scan_text(
                     text,
@@ -522,6 +596,11 @@ class MultilingualPIIDetector:
                 DetectionEntityType.PAN, text, match.start(), match.end(),
                 source_key, channel, findings, seen,
             )
+        for match in _PREFIXED_RECORD_NUMBER.finditer(text):
+            self._add_match(
+                DetectionEntityType.MEDICAL_RECORD_NUMBER,
+                text, match.start(), match.end(), source_key, channel, findings, seen,
+            )
         for match in _PIN_LABEL.finditer(text):
             self._add_match(
                 DetectionEntityType.PIN_CODE,
@@ -546,7 +625,10 @@ class MultilingualPIIDetector:
                 start = match.start("value") + name_span[0]
                 end = match.start("value") + name_span[1]
                 candidate = text[start:end]
-                if _is_clinical_name(candidate) or _is_generic_name(candidate):
+                if _is_clinical_name(candidate) or (
+                    _is_generic_name(candidate)
+                    and not _is_explicit_name_label(label)
+                ):
                     continue
                 self._add_match(
                     entity_type,
@@ -567,6 +649,7 @@ class MultilingualPIIDetector:
                 findings,
                 seen,
                 offset=match.start("value"),
+                allow_short_identifier=_is_explicit_identifier_label(label),
             )
 
         if not _is_non_patient_context(context):
@@ -610,13 +693,34 @@ class MultilingualPIIDetector:
                 self._add_match(
                     DetectionEntityType.PATIENT_NAME,
                     text,
-                    match.start("name"),
-                    match.end("name"),
+                    match.start(),
+                    match.end() if match.group("title").casefold() in {"bhai", "babu"} else match.end("name"),
                     source_key,
                     channel,
                     findings,
                     seen,
                 )
+            if channel is DetectionChannel.VALUE:
+                for match in _PROPER_NAME_SEQUENCE.finditer(text):
+                    candidate = match.group("name")
+                    if (
+                        _is_clinician_context(text, match.start("name"))
+                        or _is_clinical_name(candidate)
+                        or _is_generic_name(candidate)
+                        or _compact_key(candidate)
+                        in {"patientname", "patientfullname", "fullname"}
+                    ):
+                        continue
+                    self._add_match(
+                        DetectionEntityType.PATIENT_NAME,
+                        text,
+                        match.start("name"),
+                        match.end("name"),
+                        source_key,
+                        channel,
+                        findings,
+                        seen,
+                    )
             self._find_known_names(
                 text, source_key, channel, names, findings, seen
             )
@@ -649,18 +753,28 @@ class MultilingualPIIDetector:
         findings: list[DetectionFinding],
         seen: set[tuple[object, ...]],
     ) -> None:
+        if not names:
+            return
         tokens = _token_spans(text)
+        names_by_width: dict[int, set[str]] = {}
         for name in names:
             name_tokens = _token_spans(name)
-            if len(name_tokens) < 2:
+            if not name_tokens or (
+                len(name_tokens) < 2
+                and channel not in {
+                    DetectionChannel.HEADER,
+                    DetectionChannel.FILENAME,
+                    DetectionChannel.KEY,
+                }
+            ):
                 continue
-            width = len(name_tokens)
+            names_by_width.setdefault(len(name_tokens), set()).add(normalize_name(name))
+        for width, normalized_names in names_by_width.items():
             for index in range(len(tokens) - width + 1):
                 start = tokens[index][0]
                 end = tokens[index + width - 1][1]
-                if names_match(name, text[start:end]) and not _is_clinician_context(
-                    text, start
-                ):
+                candidate = normalize_name(text[start:end])
+                if candidate and candidate in normalized_names and not _is_clinician_context(text, start):
                     self._add_match(
                         DetectionEntityType.PATIENT_NAME,
                         text,
@@ -681,6 +795,7 @@ class MultilingualPIIDetector:
         findings: list[DetectionFinding],
         seen: set[tuple[object, ...]],
         offset: int = 0,
+        allow_short_identifier: bool = False,
     ) -> None:
         cleaned = value.strip()
         if _is_missing(cleaned):
@@ -692,8 +807,9 @@ class MultilingualPIIDetector:
             valid = name_span is not None
             if valid and name_span is not None:
                 candidate = cleaned[name_span[0] : name_span[1]]
-                valid = not _is_clinical_name(candidate) and not _is_generic_name(
-                    candidate
+                valid = not _is_clinical_name(candidate) and (
+                    not _is_generic_name(candidate)
+                    or _is_explicit_name_source(source_key)
                 )
                 cleaned = candidate
         elif entity_type is DetectionEntityType.DATE_OF_BIRTH:
@@ -723,7 +839,7 @@ class MultilingualPIIDetector:
             DetectionEntityType.INSURANCE_ID,
             DetectionEntityType.OTHER_IDENTIFIER,
         }:
-            valid = len(cleaned) >= 4 and any(
+            valid = (allow_short_identifier or len(cleaned) >= 4) and any(
                 character.isalnum() for character in cleaned
             )
         if not valid:
@@ -825,10 +941,59 @@ def _classify_key(key: str, context: tuple[str, ...]) -> DetectionEntityType | N
 
 
 def _label_type(label: str) -> DetectionEntityType | None:
-    normalized_label = _compact_key(label)
-    if normalized_label in _NORMALIZED_NAME_KEYS:
-        return DetectionEntityType.PATIENT_NAME
-    return _KEY_TYPE_LOOKUP.get(normalized_label)
+    return _LABEL_TYPE_LOOKUP.get(_compact_key(label))
+
+
+def _is_explicit_name_label(label: str) -> bool:
+    return _compact_key(label) in {
+        "patientname",
+        "patientfullname",
+        "fullname",
+        "personname",
+        "patientnaam",
+        "patientkanam",
+        "mareezkanam",
+        "रोगीकानाम",
+        "मरीजकानाम",
+    }
+
+
+def _is_explicit_name_source(source_key: str) -> bool:
+    return any(
+        _is_explicit_name_label(part)
+        for part in re.split(r"[./]", source_key)
+    )
+
+
+def _is_explicit_identifier_label(label: str) -> bool:
+    return _compact_key(label) in {
+        "patientid",
+        "patientidentifier",
+        "hospitalid",
+        "hospitalpatientid",
+        "uhid",
+        "mrn",
+        "medicalrecordnumber",
+        "registrationnumber",
+        "registrationno",
+        "regno",
+        "registrationid",
+        "ipdno",
+        "ipdnumber",
+        "opdno",
+        "opdnumber",
+        "caseid",
+        "casenumber",
+        "mareezid",
+        "रोगीआईडी",
+    }
+
+
+def _is_explicit_identifier_source(source_key: str) -> bool:
+    return any(
+        _is_explicit_identifier_label(part)
+        for part in re.split(r"[./]", source_key)
+    )
 
 
 def _is_non_patient_context(context: tuple[str, ...]) -> bool:

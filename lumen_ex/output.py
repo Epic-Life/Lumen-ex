@@ -2,11 +2,13 @@
 
 import copy
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from decimal import Decimal
 import hashlib
 import io
 import json
 from pathlib import Path, PurePosixPath
+import re
 from typing import Mapping, Sequence
 
 from lumen_ex.contracts.models import (
@@ -23,11 +25,94 @@ from lumen_ex.ingestion import validate_fhir_document
 from lumen_ex.security import SensitiveDataLeakScanner
 
 
+_SAFE_HEADER_NAMES = {
+    "name",
+    "fullname",
+    "patientname",
+    "patientfullname",
+    "firstname",
+    "lastname",
+    "givenname",
+    "familyname",
+    "relative",
+    "relativename",
+    "fathername",
+    "mothername",
+    "age",
+    "patientage",
+    "gender",
+    "sex",
+    "dob",
+    "dateofbirth",
+    "birthdate",
+    "phone",
+    "phonenumber",
+    "mobile",
+    "mobilenumber",
+    "email",
+    "address",
+    "location",
+    "city",
+    "village",
+    "district",
+    "state",
+    "pin",
+    "pincode",
+    "postalcode",
+    "patientid",
+    "patientidentifier",
+    "hospitalid",
+    "uhid",
+    "mrn",
+    "medicalrecordnumber",
+    "insuranceid",
+    "aadhaar",
+    "aadhar",
+    "abha",
+    "pan",
+    "diagnosis",
+    "condition",
+    "procedure",
+    "medication",
+    "medicine",
+    "drug",
+    "dose",
+    "dosage",
+    "frequency",
+    "vital",
+    "vitals",
+    "labresult",
+    "laboratory",
+    "complaint",
+    "history",
+    "ward",
+    "clinician",
+    "doctor",
+    "icd",
+    "date",
+    "visitdate",
+    "encounterdate",
+    "admissiondate",
+    "dischargedate",
+    "hospital",
+    "facility",
+    "lengthofstay",
+    "staydays",
+    "status",
+    "result",
+    "code",
+}
+_HEADER_IDENTIFIER = re.compile(
+    r"(?i)(?<![A-Z0-9])[A-Z0-9][A-Z0-9-]{7,}(?![A-Z0-9])"
+)
+
+
 @dataclass(frozen=True)
 class ReleaseRecord:
     parsed: ParsedRecord
     normalized: NormalizedRecord
     result: SanitizationResult
+    sensitive_values: tuple[str, ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)
@@ -79,7 +164,13 @@ class SanitizedOutputWriter:
             output_path = self._output_path(source, records)
             content, entries = self._serialize(source, records, output_path)
             if not self._scanner.scan_artifact_text(
-                content, filename=output_path
+                content,
+                filename=output_path,
+                sensitive_values=tuple(
+                    value
+                    for item in records
+                    for value in item.sensitive_values
+                ),
             ) or not all(self._scanner.scan_value(entry) for entry in entries):
                 return self._quarantine(source, "leak_scan_failed", len(records))
             destination = self._destination(output_path)
@@ -193,12 +284,7 @@ class SanitizedOutputWriter:
             raise ProcessingError("empty_file")
         if len(set(headers)) != len(headers):
             raise ProcessingError("format_mismatch")
-        output_headers = headers
-        for item in records:
-            result_headers = item.result.output_structure.get("headers")
-            if isinstance(result_headers, (list, tuple)):
-                output_headers = list(result_headers)
-                break
+        output_headers = _merge_output_headers(headers, records)
         if any(not isinstance(header, str) for header in output_headers):
             raise ProcessingError("invalid_record")
         if len(set(output_headers)) != len(output_headers):
@@ -214,7 +300,11 @@ class SanitizedOutputWriter:
                 continue
             fields = copy.deepcopy(item.result.output_fields)
             patient = _inject_patient_reference(item, fields)
-            row = [fields.get(header, "") for header in output_headers]
+            output_keys = list(fields)
+            original_keys = list(item.normalized.fields)
+            if len(output_keys) != len(original_keys) or len(output_keys) < len(headers):
+                raise ProcessingError("invalid_record")
+            row = [fields[output_keys[index]] for index in range(len(headers))]
             overflow = fields.get("None")
             if isinstance(overflow, list):
                 row.extend(overflow)
@@ -256,16 +346,23 @@ class SanitizedOutputWriter:
         text: str,
     ) -> tuple[str, list[dict[str, object]]]:
         try:
-            document = json.loads(text, object_pairs_hook=_unique_json_object)
+            document = json.loads(
+                text,
+                object_pairs_hook=_unique_json_object,
+                parse_float=Decimal,
+                parse_constant=_reject_json_constant,
+            )
         except (json.JSONDecodeError, RecursionError):
             raise ProcessingError("JSONDecodeError") from None
         except ValueError:
             raise ProcessingError("format_mismatch") from None
+        if isinstance(document, dict):
+            _redact_export_source_paths(document)
         if source.detected_format is InputFormat.FHIR:
             validate_fhir_document(document)
         entries: list[dict[str, object]] = []
         if not records:
-            return json.dumps(document, ensure_ascii=False, indent=2) + "\n", entries
+            return _json_dumps(document) + "\n", entries
 
         if len(records) == 1 and records[0].parsed.locator == "doc":
             item = records[0]
@@ -274,10 +371,14 @@ class SanitizedOutputWriter:
             replacement = copy.deepcopy(item.result.output_fields)
             patient = _inject_patient_reference(item, replacement)
             document = replacement
+            if isinstance(document, dict):
+                _redact_export_source_paths(document)
+            if source.detected_format is InputFormat.FHIR:
+                validate_fhir_document(document)
             entries.append(
                 _record_entry(output_path, "doc", "doc", patient)
             )
-            return json.dumps(document, ensure_ascii=False, indent=2) + "\n", entries
+            return _json_dumps(document) + "\n", entries
 
         pointers: list[tuple[tuple[str, ...], ReleaseRecord, object, str | None]] = []
         for item in records:
@@ -327,7 +428,7 @@ class SanitizedOutputWriter:
                         patient,
                     )
                 )
-        return json.dumps(document, ensure_ascii=False, indent=2) + "\n", entries
+        return _json_dumps(document) + "\n", entries
 
     def _destination(self, output_path: str) -> Path:
         destination = self.output_root.joinpath(*output_path.split("/"))
@@ -386,6 +487,8 @@ class OutputContractValidator:
         ):
             raise ProcessingError("invalid_record")
         if counts.get("records_processed") != len(records):
+            raise ProcessingError("invalid_record")
+        if counts.get("records_linked") != sum(record.get("patient") is not None for record in records):
             raise ProcessingError("invalid_record")
 
         exported = {
@@ -559,6 +662,132 @@ def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
             raise ValueError("duplicate_json_key")
         result[key] = value
     return result
+
+
+def _merge_output_headers(
+    original_headers: list[str], records: Sequence[ReleaseRecord]
+) -> list[str]:
+    candidates: list[list[str]] = []
+    for item in records:
+        headers = item.result.output_structure.get("headers")
+        if headers is None:
+            continue
+        if (
+            not isinstance(headers, (list, tuple))
+            or len(headers) != len(original_headers)
+            or any(not isinstance(header, str) for header in headers)
+        ):
+            raise ProcessingError("format_mismatch")
+        candidates.append(list(headers))
+
+    merged = list(original_headers)
+    for index, original in enumerate(original_headers):
+        replacements = {
+            headers[index]
+            for headers in candidates
+            if headers[index] != original
+        }
+        if len(replacements) > 1:
+            raise ProcessingError("format_mismatch")
+        if replacements:
+            merged[index] = replacements.pop()
+        if _contains_unlabeled_identifier(original):
+            merged[index] = f"field_{index + 1}"
+    return [
+        header
+        if not _is_ambiguous_single_word_header(header)
+        else f"field_{index + 1}"
+        for index, header in enumerate(merged)
+    ]
+
+
+def _contains_unlabeled_identifier(value: str) -> bool:
+    return any(
+        any(character.isalpha() for character in match.group())
+        and any(character.isdigit() for character in match.group())
+        for match in _HEADER_IDENTIFIER.finditer(value)
+    )
+
+
+def _is_ambiguous_single_word_header(value: str) -> bool:
+    words = re.findall(r"[^\W_]+", value, re.UNICODE)
+    if len(words) != 1:
+        return False
+    normalized = "".join(
+        character for character in value.casefold() if character.isalnum()
+    )
+    return normalized not in _SAFE_HEADER_NAMES
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"invalid_json_number:{value}")
+
+
+def _redact_export_source_paths(document: dict[str, object]) -> None:
+    """Remove raw filesystem provenance retained around arrays of records."""
+    for key, metadata in document.items():
+        if _compact_export_key(key) not in {"metadata", "exportmetadata", "exportmeta"}:
+            continue
+        if not isinstance(metadata, dict):
+            continue
+        for field, value in metadata.items():
+            if (
+                isinstance(value, str)
+                and _compact_export_key(field) in {"sourcepath", "sourcefilepath"}
+            ):
+                metadata[field] = "[REDACTED]"
+
+
+def _compact_export_key(key: str) -> str:
+    return "".join(character for character in key.casefold() if character.isalnum())
+
+
+def _json_dumps(value: object, indent: int = 2) -> str:
+    def encode(current: object, depth: int) -> str:
+        if current is None:
+            return "null"
+        if current is True:
+            return "true"
+        if current is False:
+            return "false"
+        if isinstance(current, str):
+            return json.dumps(current, ensure_ascii=False)
+        if isinstance(current, int):
+            return str(current)
+        if isinstance(current, Decimal):
+            if not current.is_finite():
+                raise ValueError("invalid_json_number")
+            return str(current)
+        if isinstance(current, float):
+            return json.dumps(current, allow_nan=False)
+        if isinstance(current, Mapping):
+            if not all(isinstance(key, str) for key in current):
+                raise TypeError("json_object_key_invalid")
+            if not current:
+                return "{}"
+            prefix = " " * (indent * (depth + 1))
+            closing = " " * (indent * depth)
+            items = (
+                prefix
+                + json.dumps(key, ensure_ascii=False)
+                + ": "
+                + encode(child, depth + 1)
+                for key, child in current.items()
+            )
+            return "{\n" + ",\n".join(items) + "\n" + closing + "}"
+        if isinstance(current, (list, tuple)):
+            if not current:
+                return "[]"
+            prefix = " " * (indent * (depth + 1))
+            closing = " " * (indent * depth)
+            items = (
+                prefix + encode(child, depth + 1)
+                for child in current
+            )
+            return "[\n" + ",\n".join(items) + "\n" + closing + "]"
+        raise TypeError("json_value_invalid")
+
+    return encode(value, 0)
 
 
 def _array_index(segment: str) -> int:
