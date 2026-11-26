@@ -1,4 +1,4 @@
-# Shared contracts (foundation through detection)
+# Shared contracts (through output and reporting)
 
 Internal Python dataclasses and enums live in `lumen_ex.contracts.models`. They are
 deliberately separate from on-disk submission formats so pipeline code can evolve
@@ -37,6 +37,9 @@ without changing the evaluator interface.
   quarantine reason code.
 - `PipelineReport`: manifest entries, aggregate counts, timing, resource use, and
   optional entity counts.
+- `ReleaseRecord`: one parsed input record, its normalized projection, and a
+  `SanitizationResult` retained internally for format-preserving serialization. These
+  values are not written as an internal JSON representation.
 
 `ProcessingError` carries a safe code, not source content. The coordinator converts
 expected processing errors, unexpected stage failures, and leak-scan failures into
@@ -80,17 +83,14 @@ are evidence rankings, not calibrated probabilities.
 Protocols in `lumen_ex.stages` define the boundaries for ingestion, normalization,
 detection, linkage, privacy transformation, leak scanning, writing, and reporting.
 These are interface contracts; ingestion, identity normalization, deterministic PII
-detection, linkage, and privacy transformation have modular implementations.
+detection, linkage, privacy transformation, release serialization, and output validation
+have implementations.
 `MultilingualPIIDetector` returns findings for structured values,
 free-text mentions, JSON keys, CSV headers, and filenames without modifying the record.
-The production starter adapter reuses it through `SensitiveDataLeakScanner` before
-writing sanitized outputs and metadata. The M06 `PrivacyTransformer` exposes a singleton stage adapter
-and a cohort-aware `transform_batch` API; the record-at-a-time coordinator does not
-yet provide the cohort integration needed to use it for release. The coordinator exposes `Pipeline.ingest_directory`
-and receives normalization, detection, linkage, transformation, leak-scanning,
-output-writing, and reporting implementations through `PipelineStages`. It writes only
-a result marked sanitized after the leak scanner accepts it, records every status for
-reporting, and finalizes a manifest after processing.
+The `ReleasePipeline` applies the stages across the cohort and scans serialized output
+before writing. The M06 `PrivacyTransformer` retains its singleton stage adapter and
+cohort-aware `transform_batch` API; the injectable `Pipeline` remains a record-at-a-time
+coordinator for stage-level use and exposes `Pipeline.ingest_directory`.
 
 ## Official output compatibility
 
@@ -104,8 +104,21 @@ The governing format is the starter kit's `docs/SPEC.md`, not these internal mod
 - Output paths remain relative to the output root; hashes identify inputs without
   exposing source filenames in the report.
 - `PatientIdentity` and its `NormalizedRecord` projections are internal contracts only.
-  They do not change `records.jsonl`, the report schema, or any pseudonym behavior.
+  They do not change `records.jsonl` or the report schema. The release writer places a
+  pseudonym in an existing identity field only when that mapping is reliable.
 
-The existing starter is still responsible for baseline serialization. The M07 scanner
-does not alter the validator or official output shapes; see [security boundaries and
-limitations](security.md).
+`SanitizedOutputWriter` serializes complete source files only after all records in a
+file are sanitized and scanned. CSV/TSV retain their delimiter and header (files with
+duplicate headers are quarantined because their values cannot be mapped unambiguously).
+JSON records are replaced using their input JSON Pointers; suppressed array items are
+removed and reported with an output locator when indices shift. Text output is UTF-8.
+Pseudonyms are placed in an existing string identity field, or a `Patient:` header for a
+text note; if the identity cannot be placed reliably, the output mapping uses `null`.
+
+`OutputContractValidator` checks the report schema and file counts, ensures each record
+mapping points to an emitted file, and verifies that a non-null pseudonym occurs inside
+the referenced output record. `ReleasePipeline` runs the cohort transformer before
+serializing files and writes the official report and records formats. The starter
+implementation remains available for compatibility tests but is not called by the
+submission CLI. The official validator remains unchanged; see [security boundaries
+and limitations](security.md).

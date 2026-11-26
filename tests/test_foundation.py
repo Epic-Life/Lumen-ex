@@ -415,7 +415,7 @@ class CliTests(unittest.TestCase):
             self.assertIn("secret_missing", completed.stderr)
             self.assertNotIn(str(input_root), completed.stderr)
 
-    def test_cli_quarantines_structured_pii_before_writing_artifact(self) -> None:
+    def test_cli_suppresses_singleton_without_leaking_structured_pii(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             input_root = root / "input"
@@ -446,8 +446,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             report_text = (output_root / "report.json").read_text(encoding="utf-8")
             report = json.loads(report_text)
-            self.assertEqual(report["files"][0]["status"], "quarantined")
-            self.assertEqual(report["files"][0]["reason"], "leak_scan_failed")
+            self.assertEqual(report["files"][0]["status"], "suppressed")
             self.assertFalse((output_root / "sanitized" / "patients.csv").exists())
             self.assertNotIn("Asha Sharma", report_text)
 

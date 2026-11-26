@@ -4,9 +4,9 @@ Lumen-ex is an offline, CPU-only, LLM-free healthcare-data privacy firewall proj
 for the Secret Wards hackathon track. The repository includes its submission
 foundation, file-ingestion API, identity helpers, a deterministic PII detector, a
 conservative patient-linkage stage, and a modular cohort-aware privacy transformation
-stage. The submission CLI retains the starter adapter, now guarded by an offline
-pre-write leak scanner for sanitized files, record metadata, reports, and filenames.
-The modular cohort-aware privacy stage is not yet integrated with submission output.
+stage. The submission CLI now connects those stages to whole-file sanitized output,
+record mappings, reporting, and contract validation. The starter implementation remains
+available as a compatibility baseline, but is no longer the production CLI path.
 
 The official challenge kit is included in this repository. Read [START_HERE.md](START_HERE.md)
 and the official [problem statement](docs/PROBLEM_STATEMENT.md),
@@ -26,12 +26,11 @@ read it, and this foundation does not import it.
 - Quarantine unsupported or unsafe files; never silently pass them through as clean.
 - Preserve clinical values according to the official specification.
 
-These are project requirements, not claims that the current baseline achieves them.
-The shipped submission CLI still uses the starter's basic regex transformation, which
-has incomplete handling of hidden PII channels. The M07 guard uses the existing
-detector to quarantine detected leaks before writing each artifact, but cannot guarantee
-that all PII is detected. The modular privacy stage requires detector and linkage
-results plus a complete cohort; it does not replace the official output writer.
+These are project requirements, not claims that the current implementation achieves
+complete de-identification or prevents every re-identification attack. The release
+pipeline uses the existing detector and transformation stages, but they remain
+rule-based and have documented coverage limits. The cohort transformer requires all
+parsed records in memory for its current risk assessment.
 
 ## Setup
 
@@ -80,9 +79,11 @@ config/policy.yaml         validated policy settings
 lumen_ex/
   cli.py                   arguments, configuration, safe diagnostics
   config.py                validated policy loading
-  pipeline.py              injectable stage coordinator and ingestion entry point
+  pipeline.py              injectable record-stage coordinator
+  release.py               cohort-aware submission orchestration
+  output.py                whole-file serialization and output validation
   stages.py                future module interfaces
-  contracts/models.py      pipeline data contracts
+  contracts/models.py      pipeline and report data contracts
   contracts/identity.py    compact identity projection contracts
   privacy/                 keyed pseudonyms, dates, generalization, risk, and transforms
   value_normalization.py   low-level age/date normalizers shared without package cycles

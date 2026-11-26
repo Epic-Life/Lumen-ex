@@ -75,6 +75,26 @@ class SensitiveDataLeakScannerTests(unittest.TestCase):
         )
         self.assertTrue(self.scanner.scan_value(report))
 
+    def test_accepts_release_placeholders_and_aggregated_entity_counts(self) -> None:
+        report = {
+            "counts": {"records_processed": 5},
+            "entities": {"AGE": 5, "PATIENT_NAME": 5, "PHONE": 5},
+        }
+        self.assertTrue(
+            self.scanner.scan_artifact_text(
+                json.dumps(report), filename="report.json"
+            )
+        )
+        self.assertTrue(
+            self.scanner.scan_artifact_text(
+                "name,phone\n[REDACTED],PSN-0123456789ABCDEF\n",
+                filename="sanitized/records.csv",
+            )
+        )
+        self.assertFalse(
+            self.scanner.scan_text(f"Name: [REDACTED] {_CANARY}")
+        )
+
     def test_scans_files_and_fails_closed_for_unsupported_or_symlinked_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

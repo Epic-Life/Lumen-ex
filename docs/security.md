@@ -1,13 +1,12 @@
-# M07 security controls and limitations
+# Security controls and output-release limitations
 
 ## Secret handling
 
 The root CLI requires `RAKSHA_SECRET` from the process environment. It passes the
-secret to the starter only for the current invocation, clears the starter's module
-reference in a `finally` block, and clears the leak scanner's canary reference after
-processing. Secrets are not written to reports, logs, or temporary files. Python string
-and byte objects cannot be reliably zeroized; clearing references is not proof of
-physical memory erasure.
+secret to the per-run registry and privacy transformer and clears the leak scanner's
+canary reference after processing. Secrets are not written to reports, logs, or
+temporary files. Python string and byte objects cannot be reliably zeroized; clearing
+references is not proof of physical memory erasure.
 
 The encrypted identity registry derives separate keys for database encryption and
 blind-index lookup using HKDF-SHA-256. It encrypts persisted identity evidence with
@@ -22,11 +21,16 @@ customized by this project.
 
 `SensitiveDataLeakScanner` reuses the existing offline M04 detector. It scans
 structured values and keys, CSV/TSV headers and values, JSON/JSONL, free text,
-filenames, reports, and caller-supplied log text. The starter adapter checks each
-transformed artifact and its record metadata in memory before writing it. It then
-checks the complete `records.jsonl`, report, and count-only stdout summary before
-release. Detected or unscannable individual artifacts are quarantined with safe reason
-codes; metadata scan failures stop report generation with a nonzero CLI result.
+filenames, reports, and caller-supplied log text. `SanitizedOutputWriter` scans each
+complete serialized file and its record metadata before writing; the release pipeline
+then scans `records.jsonl` and `report.json`. Known M06 placeholders (`[REDACTED]`,
+`[LOCATION]`) are masked only in the scanner's in-memory copy to avoid treating the
+firewall's own replacements as identifiers. Valid generated `PSN-` pseudonyms and the
+contract's typed entity-count keys are likewise treated as release metadata in the
+scanner's in-memory copy. None of these exceptions alters the emitted artifact.
+Detected or unscannable individual artifacts
+are quarantined with safe reason codes; metadata scan failures stop report generation
+with a nonzero CLI result.
 
 The scanner is bounded to 64 MiB per artifact by default; JSON artifacts over 4 MiB or
 structured streams with more than 100,000 items fail closed to limit parser memory and
@@ -41,12 +45,17 @@ representation.
 ## Limitations
 
 - The M04 detector is deterministic and rule-based, not a complete PII recognizer. An
-  unrecognized identifier can pass the scanner.
+  unrecognized identifier can pass the scanner; a scanner pass does not prove that the
+  output contains no PII.
 - Generic opaque binary formats are rejected rather than decoded. Arbitrary BLOB
   content in SQLite is not semantically inspected; the scanner checks canary bytes.
-- The production CLI still uses the starter's basic transformation rather than the
-  cohort-aware M06 transformer. The scanner can quarantine recognized leaks but does
-  not make the starter a complete privacy firewall.
+- The release pipeline currently retains parsed records and cohort transformations in
+  memory. Large hidden inputs could require a bounded cohort strategy that preserves
+  M06 risk semantics; that optimization has not been implemented.
+- FHIR output reuses the ingestor's supported resource/Bundle shape checks and does not
+  perform full profile, terminology, or general reference-resolution validation.
+- The current release matcher has no configured per-hospital namespace, so hospital
+  identifiers are not used as global blocking keys.
 - Per-file artifacts are written only after their content and record metadata pass.
   If a later report-level check fails, previously written artifacts remain in the
   output directory; they have each passed the per-file scan, but the run returns an

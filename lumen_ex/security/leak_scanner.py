@@ -10,6 +10,7 @@ import sqlite3
 
 from lumen_ex.contracts.models import (
     DetectionResult,
+    DetectionEntityType,
     InputFileMetadata,
     NormalizedRecord,
     SanitizationResult,
@@ -27,6 +28,9 @@ _JSON_SHA256_FIELD = re.compile(
     r'("(?:input_)?sha256"\s*:\s*")[0-9a-fA-F]{64}(")',
     re.IGNORECASE,
 )
+_RELEASE_PLACEHOLDER = re.compile(r"\[(?:REDACTED|LOCATION)\]")
+_RELEASE_PSEUDONYM = re.compile(r"PSN-[0-9A-HJKMNP-TV-Z]{16}")
+_ENTITY_COUNT_NAMES = frozenset(item.value for item in DetectionEntityType)
 
 
 class SensitiveDataLeakScanner:
@@ -83,7 +87,11 @@ class SensitiveDataLeakScanner:
         if filename is not None and self._contains_canary(filename):
             return False
         result = self._detect(
-            {"text": text},
+            {
+                "text": _RELEASE_PSEUDONYM.sub(
+                    "", _RELEASE_PLACEHOLDER.sub("", text)
+                )
+            },
             headers=(),
         )
         if result.identifier_count:
@@ -378,29 +386,51 @@ class SensitiveDataLeakScanner:
                     item_count += 1
                     if item_count > _MAX_STRUCTURED_ITEMS:
                         return None
+                    safe_key = (
+                        _RELEASE_PLACEHOLDER.sub("", key)
+                        if isinstance(key, str)
+                        else key
+                    )
                     if (
                         isinstance(key, str)
                         and key.casefold() in {"sha256", "input_sha256"}
                         and isinstance(value, str)
                         and _SHA256_VALUE.fullmatch(value)
                     ):
-                        target[key] = "[SHA256]"
+                        target[safe_key] = "[SHA256]"
+                    elif (
+                        isinstance(key, str)
+                        and key.casefold() == "entities"
+                        and isinstance(value, dict)
+                        and all(
+                            isinstance(entity, str)
+                            and entity in _ENTITY_COUNT_NAMES
+                            and isinstance(count, int)
+                            and not isinstance(count, bool)
+                            and count >= 0
+                            for entity, count in value.items()
+                        )
+                    ):
+                        target[safe_key] = {
+                            f"entity_{index}": count
+                            for index, count in enumerate(value.values())
+                        }
                     elif isinstance(value, dict):
                         child = clones.get(id(value))
                         if child is None:
                             child = {}
                             clones[id(value)] = child
                             pending.append((value, child))
-                        target[key] = child
+                        target[safe_key] = child
                     elif isinstance(value, (list, tuple)):
                         child = clones.get(id(value))
                         if child is None:
                             child = []
                             clones[id(value)] = child
                             pending.append((value, child))
-                        target[key] = child
+                        target[safe_key] = child
                     else:
-                        target[key] = value
+                        target[safe_key] = _mask_release_tokens(value)
             elif isinstance(source, (list, tuple)) and isinstance(target, list):
                 for value in source:
                     item_count += 1
@@ -414,7 +444,7 @@ class SensitiveDataLeakScanner:
                             pending.append((value, child))
                         target.append(child)
                     else:
-                        target.append(value)
+                        target.append(_mask_release_tokens(value))
         return root
 
     @staticmethod
@@ -439,3 +469,11 @@ class SensitiveDataLeakScanner:
     def _contains_canary_bytes(self, content: bytes) -> bool:
         lowered = content.lower()
         return any(canary.encode("utf-8") in lowered for canary in self._canaries)
+
+
+def _mask_release_tokens(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    return _RELEASE_PSEUDONYM.sub(
+        "", _RELEASE_PLACEHOLDER.sub("", value)
+    )

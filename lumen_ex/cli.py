@@ -5,9 +5,9 @@ import logging
 import os
 from pathlib import Path
 
-from lumen_ex.baseline import run_starter
 from lumen_ex.config import load_config
 from lumen_ex.errors import LumenError
+from lumen_ex.release import ReleasePipeline
 from lumen_ex.security import SensitiveDataLeakScanner
 
 
@@ -46,9 +46,10 @@ def main(argv: list[str] | None = None) -> int:
             raise LumenError("secret_missing")
         leak_scanner = SensitiveDataLeakScanner(canaries=(secret,))
         try:
-            return run_starter(
+            ReleasePipeline(
                 input_root, output_root, config, secret, leak_scanner
-            )
+            ).run()
+            return 0
         finally:
             leak_scanner.clear_canaries()
     except LumenError as error:

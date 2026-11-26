@@ -709,6 +709,11 @@ def _validate_fhir(document: object) -> None:
                 pending.append(nested)
 
 
+def validate_fhir_document(document: object) -> None:
+    """Validate the supported FHIR resource and Bundle shape before release."""
+    _validate_fhir(document)
+
+
 def _json_pointer(path: tuple[str | int, ...]) -> str:
     return "/" + "/".join(
         str(segment).replace("~", "~0").replace("/", "~1") for segment in path
