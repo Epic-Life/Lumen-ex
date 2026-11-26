@@ -2,10 +2,10 @@
 
 Lumen-ex is an offline, CPU-only, LLM-free healthcare-data privacy firewall project
 for the Secret Wards hackathon track. The repository includes its submission
-foundation, file-ingestion API, identity helpers, and a deterministic PII detector;
-the submission CLI still uses the starter adapter. The project does **not** yet
-implement an integrated privacy firewall, PII transformation, anonymization, or privacy
-scoring.
+foundation, file-ingestion API, identity helpers, a deterministic PII detector, and a
+conservative patient-linkage stage; the submission CLI still uses the starter adapter.
+The project does **not** yet implement an integrated privacy firewall, PII
+transformation, anonymization, or privacy scoring.
 
 The official challenge kit is included in this repository. Read [START_HERE.md](START_HERE.md)
 and the official [problem statement](docs/PROBLEM_STATEMENT.md),
@@ -84,12 +84,13 @@ lumen_ex/
   contracts/identity.py    compact identity projection contracts
   ingestion.py             deterministic discovery, quarantine outcomes, and readers
   identity.py              identity extraction and field normalization
-  registry.py              encrypted per-run registry storage
+  registry.py              encrypted per-run registry and guarded cluster aliases
+  matching.py              bounded candidate retrieval and conservative linkage
   detection/indic_names.py Devanagari-aware candidate name normalization
   detection/pii.py       deterministic multilingual PII detection
   baseline.py              compatibility adapter for the shipped starter
 starter/                   official starter and policy (preserved)
-tests/                     foundation, ingestion, identity, and detection tests
+tests/                     foundation, ingestion, identity, detection, and linkage tests
 docs/architecture.md       responsibilities, boundaries, and data flow
 docs/contracts.md          internal models and official format compatibility
 docs/decisions/            material architecture decisions

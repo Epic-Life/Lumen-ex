@@ -41,8 +41,9 @@ programming errors are not silently presented as successful processing.
 
 `PatientIdentity` in `lumen_ex.contracts.identity` contains only identity attributes
 and their `IdentityValue(original, normalized, source_key)` entries. Supported
-attributes are name, date of birth, age, gender, phone, address, location,
-hospital-specific identifier, government/health identifier, and insurance identifier.
+attributes are patient and relative names, date of birth, age, gender, phone, email,
+address, location, hospital-specific identifier, government/health identifier, and
+insurance identifier.
 It also records the source file and record locator, missing and malformed fields, and
 normalization metadata. Source values and locators are excluded from object
 representations to reduce accidental logging exposure. The projection deliberately does
@@ -52,7 +53,21 @@ not retain the complete medical record.
 `extract_fhir_identities` returns identities for Patient resources in a FHIR R4
 resource or Bundle. `PatientIdentityNormalizer` attaches those projections to
 `NormalizedRecord` while retaining the parsed source fields and structure. These
-helpers do not decode files or guess unlabeled names.
+helpers do not decode files or guess unlabeled names. Relative names are retained only
+when explicitly labeled, nested under a relative context, or attached to a patient-name
+value using an S/o, D/o, W/o, or C/o marker. Email values must pass a bounded address
+shape check before they are used for matching.
+
+## Linkage decisions
+
+`IdentityMatcher.evaluate` returns an internal `IdentityMatchResult` with deterministic
+candidate scores and a bounded evidence list. It supports a unique strong identifier
+or a unique name plus DOB, relative name, or village and age within one year; name-only
+and ambiguous matches remain unresolved. `IdentityLinker` maps a linked identity to
+`LinkageAction.LINK`, a safely new identity to `DO_NOT_LINK`, and uncertain or
+multi-identity input to `ABSTAIN`. Registry cluster merges reject transitive conflicts
+between different hospital identifiers in the same hospital namespace. These scores
+are evidence rankings, not calibrated probabilities.
 
 ## Stage interfaces
 

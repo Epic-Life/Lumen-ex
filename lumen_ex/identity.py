@@ -25,10 +25,12 @@ from lumen_ex.errors import ProcessingError
 
 _FIELD_NAMES = (
     "name",
+    "relative_name",
     "date_of_birth",
     "age",
     "gender",
     "phone",
+    "email",
     "address",
     "location",
     "hospital_identifier",
@@ -41,6 +43,37 @@ _WORD_SEPARATORS = re.compile(r"[^\w]+", re.UNICODE)
 _AGE = re.compile(
     r"^\s*(\d{1,3})(?:\s*(?:years?|yrs?|y|saal|sal|varsh|वर्ष|साल))?"
     r"(?:\s*/\s*[mfx])?\s*$",
+    re.IGNORECASE,
+)
+_RELATIVE_NAME = re.compile(
+    r"(?i)\b(?P<marker>s\s*/\s*o|d\s*/\s*o|w\s*/\s*o|c\s*/\s*o)"
+    r"\s*[:=\-]?\s*(?P<name>[^,;\r\n]+)"
+)
+_RELATIVE_CLINICAL_TERMS = frozenset(
+    {
+        "abdominal",
+        "bleeding",
+        "bp",
+        "chest",
+        "complaint",
+        "cough",
+        "diagnosis",
+        "disease",
+        "fever",
+        "fracture",
+        "headache",
+        "hypertension",
+        "injury",
+        "pain",
+        "symptom",
+        "vomiting",
+        "weakness",
+        "wound",
+    }
+)
+_EMAIL = re.compile(
+    r"^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,63}$",
     re.IGNORECASE,
 )
 _PHONE_PUNCTUATION = frozenset(" +-()./")
@@ -67,6 +100,16 @@ _ALIASES: dict[str, frozenset[str]] = {
             "mareezkanam",
             "रोगीकानाम",
             "मरीजकानाम",
+        }
+    ),
+    "relative_name": frozenset(
+        {
+            "relativename",
+            "fathername",
+            "mothername",
+            "husbandname",
+            "wifename",
+            "spousename",
         }
     ),
     "date_of_birth": frozenset(
@@ -100,6 +143,7 @@ _ALIASES: dict[str, frozenset[str]] = {
             "मोबाइल",
         }
     ),
+    "email": frozenset({"email", "emailaddress", "patientemail", "mailaddress"}),
     "address": frozenset(
         {"address", "patientaddress", "pata", "gharkapata", "पता"}
     ),
@@ -200,7 +244,6 @@ _NON_PATIENT_CONTEXTS = {
     "facility",
     "guardian",
     "practitioner",
-    "relative",
     "staff",
 }
 _NOTE_LABELS: dict[str, tuple[str, ...]] = {
@@ -214,6 +257,18 @@ _NOTE_LABELS: dict[str, tuple[str, ...]] = {
         "रोगी का नाम",
         "मरीज का नाम",
         "नाम",
+    ),
+    "relative_name": (
+        "relative name",
+        "father name",
+        "mother name",
+        "husband name",
+        "wife name",
+        "spouse name",
+        "s/o",
+        "d/o",
+        "w/o",
+        "c/o",
     ),
     "date_of_birth": (
         "date of birth",
@@ -239,6 +294,7 @@ _NOTE_LABELS: dict[str, tuple[str, ...]] = {
         "फोन",
         "मोबाइल",
     ),
+    "email": ("email", "email address", "e-mail"),
     "address": ("address", "pata", "ghar ka pata", "पता"),
     "location": (
         "village",
@@ -402,6 +458,14 @@ def normalize_identifier(value: str) -> str | None:
     return _ID_PUNCTUATION.sub("", ascii_digits)
 
 
+def normalize_email(value: str) -> str | None:
+    """Return a validated, case-folded email address or None."""
+    normalized = unicodedata.normalize("NFKC", value).strip()
+    if len(normalized) > 254 or _EMAIL.fullmatch(normalized) is None:
+        return None
+    return normalized.casefold()
+
+
 def normalize_location(value: str) -> str:
     """Normalize a location's script, case, whitespace, and punctuation."""
     text = transliterate_to_latin(unicodedata.normalize("NFKC", value)).casefold()
@@ -517,10 +581,12 @@ def _build_identity(
 ) -> PatientIdentity:
     normalizers = {
         "name": _normalize_name,
+        "relative_name": _normalize_name,
         "date_of_birth": _normalize_date_value,
         "age": _normalize_age_value,
         "gender": _normalize_gender_value,
         "phone": _normalize_phone_value,
+        "email": _normalize_email_value,
         "address": _normalize_address_value,
         "location": _normalize_location_value,
         "hospital_identifier": _normalize_identifier_value,
@@ -622,13 +688,26 @@ def _collect_mapping_scalar(
 ) -> None:
     key = _key_name(path[-1])
     contexts = {_key_name(part) for part in path[:-1]}
-    if contexts & _NON_PATIENT_CONTEXTS:
-        return
-
     field_name = next(
         (name for name, aliases in _ALIASES.items() if key in aliases),
         None,
     )
+    relative_contexts = {
+        "relative",
+        "nextofkin",
+        "father",
+        "mother",
+        "husband",
+        "wife",
+        "spouse",
+    }
+    if contexts & relative_contexts:
+        if field_name in {"name", "relative_name"} or key in _NAME_PARTS:
+            _append(candidates, "relative_name", value, ".".join(path))
+        return
+    if contexts & _NON_PATIENT_CONTEXTS:
+        return
+
     if field_name == "name":
         if contexts & _EXCLUDED_NAME_CONTEXTS:
             return
@@ -644,11 +723,13 @@ def _collect_mapping_scalar(
         "age",
         "gender",
         "phone",
+        "email",
         "address",
         "location",
         "hospital_identifier",
         "insurance_identifier",
         "government_identifier",
+        "relative_name",
     }:
         if field_name == "address" and contexts & {"contact", "telecom"}:
             return
@@ -696,8 +777,14 @@ def _extract_fhir_patient(patient: Mapping[str, object]) -> dict[str, list[tuple
         _append(candidates, target, value, f"identifier/{identifier_index}/value")
 
     for index, telecom in enumerate(_as_mappings(patient.get("telecom"))):
-        if str(telecom.get("system", "")).casefold() == "phone":
-            _append_if_scalar(candidates, "phone", telecom.get("value"), f"telecom/{index}/value")
+        system = str(telecom.get("system", "")).casefold()
+        if system in {"phone", "email"}:
+            _append_if_scalar(
+                candidates,
+                system,
+                telecom.get("value"),
+                f"telecom/{index}/value",
+            )
 
     for index, address in enumerate(_as_mappings(patient.get("address"))):
         parts: list[str] = []
@@ -753,6 +840,11 @@ def _normalize_phone_value(value: object) -> str | None:
     return normalize_phone(text) if text is not None else None
 
 
+def _normalize_email_value(value: object) -> str | None:
+    text = _scalar_text(value)
+    return normalize_email(text) if text is not None else None
+
+
 def _normalize_address_value(value: object) -> str | None:
     text = _scalar_text(value)
     normalized = normalize_location(text or "")
@@ -804,6 +896,22 @@ def _append(
     source_key: str,
 ) -> None:
     candidates[field_name].append((value, source_key))
+    if field_name == "name":
+        text = _scalar_text(value)
+        relative = _RELATIVE_NAME.search(text or "")
+        if relative is not None and relative.group("name").strip():
+            candidates[field_name].pop()
+            patient_name = (text or "")[: relative.start()].strip(" ,;:-")
+            if patient_name:
+                candidates[field_name].append((patient_name, source_key))
+            relative_name = relative.group("name").strip()
+            if not _is_clinical_relative_candidate(relative_name):
+                candidates["relative_name"].append((relative_name, source_key))
+
+
+def _is_clinical_relative_candidate(value: str) -> bool:
+    normalized = normalize_name(value)
+    return bool(set(normalized.split()) & _RELATIVE_CLINICAL_TERMS)
 
 
 def _empty_candidates() -> dict[str, list[tuple[object, str]]]:
@@ -853,6 +961,7 @@ __all__ = [
     "normalize_date",
     "normalize_gender",
     "normalize_identifier",
+    "normalize_email",
     "normalize_location",
     "normalize_phone",
 ]

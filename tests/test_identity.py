@@ -12,6 +12,7 @@ from lumen_ex.identity import (
     normalize_age,
     normalize_date,
     normalize_gender,
+    normalize_email,
     normalize_identifier,
     normalize_location,
     normalize_phone,
@@ -74,6 +75,8 @@ class ScalarNormalizationTests(unittest.TestCase):
         self.assertIsNone(normalize_gender("not specified"))
         self.assertEqual(normalize_identifier("१२३४-AB"), "1234AB")
         self.assertEqual(normalize_location("  Rae-Bareli  "), "rae bareli")
+        self.assertEqual(normalize_email(" Patient@Example.ORG "), "patient@example.org")
+        self.assertIsNone(normalize_email("not-an-email"))
 
 
 class IdentityExtractionTests(unittest.TestCase):
@@ -165,6 +168,40 @@ class IdentityExtractionTests(unittest.TestCase):
         self.assertEqual(
             identity.insurance_identifier[0].normalized, "POLICYTEST2"
         )
+
+    def test_extracts_relative_name_and_email_for_linkage(self) -> None:
+        identity = extract_identity(
+            {
+                "Patient Name": "Asha Sharma, W/o Rajan Sharma",
+                "Email Address": "Asha.Sharma@Example.org",
+                "relative": {"name": "Rajan Sharma"},
+            },
+            "registration/patient.json",
+        )
+
+        self.assertEqual(identity.name[0].normalized, "asha sharma")
+        self.assertEqual(identity.relative_name[0].normalized, "rajan sharma")
+        self.assertEqual(identity.email[0].normalized, "asha.sharma@example.org")
+
+    def test_does_not_treat_a_care_of_complaint_as_a_relative_name(self) -> None:
+        identity = extract_identity(
+            {"Patient Name": "Meera Khan, C/O chest pain"},
+            "notes/clinical.txt",
+        )
+
+        self.assertEqual(identity.name[0].normalized, "meera khan")
+        self.assertFalse(identity.relative_name)
+
+    def test_extracts_email_from_fhir_telecom(self) -> None:
+        identity = extract_identity(
+            {
+                "resourceType": "Patient",
+                "telecom": [{"system": "email", "value": "Asha@Example.org"}],
+            },
+            "fhir/patient.json",
+        )
+
+        self.assertEqual(identity.email[0].normalized, "asha@example.org")
 
     def test_rejects_excessively_nested_identity_mappings_instead_of_skipping(self) -> None:
         record: dict[str, object] = {}

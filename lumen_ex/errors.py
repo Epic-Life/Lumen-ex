@@ -27,6 +27,7 @@ SAFE_ERROR_CODES = frozenset(
         "CSVError",
         "registry_secret_missing",
         "registry_data_invalid",
+        "registry_cluster_conflict",
         "registry_decision_invalid",
         "registry_confidence_invalid",
         "registry_reference_invalid",

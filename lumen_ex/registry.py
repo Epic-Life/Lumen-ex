@@ -27,10 +27,12 @@ from lumen_ex.errors import ProcessingError
 
 _FIELDS = (
     "name",
+    "relative_name",
     "date_of_birth",
     "age",
     "gender",
     "phone",
+    "email",
     "address",
     "location",
     "hospital_identifier",
@@ -400,18 +402,22 @@ class EncryptedIdentityRegistry:
             )
 
     def set_canonical_patient(self, source_id: str, canonical_id: str) -> None:
-        """Record a reconciliation alias without deciding whether a merge is safe."""
+        """Merge two identity clusters unless a hospital-ID conflict is transitive."""
         if source_id == canonical_id:
             raise ProcessingError("registry_reference_invalid")
         if not self._patient_exists(source_id) or not self._patient_exists(canonical_id):
             raise ProcessingError("registry_reference_invalid")
-        if self._resolve_patient(canonical_id) == source_id:
-            raise ProcessingError("registry_reference_invalid")
         with self.transaction():
+            source_root = self._resolve_patient(source_id)
+            canonical_root = self._resolve_patient(canonical_id)
+            if source_root == canonical_root:
+                raise ProcessingError("registry_reference_invalid")
+            if self._clusters_have_hospital_id_conflict(source_root, canonical_root):
+                raise ProcessingError("registry_cluster_conflict")
             self._execute(
                 "UPDATE patients SET status = 'merged', canonical_id = ? "
                 "WHERE patient_id = ?",
-                (canonical_id, source_id),
+                (canonical_root, source_root),
             )
 
     def finalize_patient(self, patient_id: str) -> None:
@@ -595,6 +601,32 @@ class EncryptedIdentityRegistry:
             if canonical_id is None:
                 return current
             current = canonical_id
+
+    def _clusters_have_hospital_id_conflict(
+        self, first_root: str, second_root: str
+    ) -> bool:
+        row = self._execute(
+            "WITH RECURSIVE first_family(patient_id) AS ("
+            "SELECT ? UNION ALL "
+            "SELECT patients.patient_id FROM patients "
+            "JOIN first_family ON patients.canonical_id = first_family.patient_id"
+            "), second_family(patient_id) AS ("
+            "SELECT ? UNION ALL "
+            "SELECT patients.patient_id FROM patients "
+            "JOIN second_family ON patients.canonical_id = second_family.patient_id"
+            ") "
+            "SELECT 1 FROM block_index first_block "
+            "JOIN block_index second_block "
+            "ON first_block.kind = second_block.kind "
+            "AND first_block.namespace_token = second_block.namespace_token "
+            "AND first_block.value_token != second_block.value_token "
+            "WHERE first_block.kind = 'hospital_identifier' "
+            "AND first_block.patient_id IN (SELECT patient_id FROM first_family) "
+            "AND second_block.patient_id IN (SELECT patient_id FROM second_family) "
+            "LIMIT 1",
+            (first_root, second_root),
+        ).fetchone()
+        return row is not None
 
     @staticmethod
     def _coerce_decision(value: IdentityDecision | str) -> IdentityDecision:

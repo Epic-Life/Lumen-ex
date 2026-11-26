@@ -27,6 +27,33 @@ def _identity(locator: str = "row:0") -> PatientIdentity:
     )
 
 
+def _create_hospital_record(
+    registry: EncryptedIdentityRegistry,
+    locator: str,
+    hospital_id: str | None,
+    namespace: str,
+) -> str:
+    patient_id = registry.create_patient(_SOURCE_SHA, locator)
+    registry.add_record_mapping(
+        _SOURCE_SHA,
+        locator,
+        patient_id,
+        IdentityDecision.CREATE,
+        1.0,
+    )
+    identity = PatientIdentity(
+        source_file="registration/synthetic.csv",
+        record_locator=locator,
+        hospital_identifier=(
+            (IdentityValue(hospital_id, hospital_id, "PatientID"),)
+            if hospital_id
+            else ()
+        ),
+    )
+    registry.add_identity(patient_id, _SOURCE_SHA, identity, namespace=namespace)
+    return patient_id
+
+
 class EncryptedIdentityRegistryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.parent = tempfile.TemporaryDirectory()
@@ -177,6 +204,58 @@ class EncryptedIdentityRegistryTests(unittest.TestCase):
             )
             with self.assertRaises(ProcessingError):
                 registry.set_canonical_patient(first, second)
+
+    def test_cluster_merge_rejects_transitive_hospital_identifier_conflicts(self) -> None:
+        with EncryptedIdentityRegistry.temporary(
+            _SECRET, Path(self.parent.name)
+        ) as registry:
+            first = _create_hospital_record(
+                registry, "row:0", "HOSPITAL-A-1", "hospital-a"
+            )
+            bridge = _create_hospital_record(
+                registry, "row:1", None, "hospital-a"
+            )
+            third = _create_hospital_record(
+                registry, "row:2", "HOSPITAL-A-2", "hospital-a"
+            )
+            registry.set_canonical_patient(bridge, first)
+
+            with self.assertRaises(ProcessingError) as conflict:
+                registry.set_canonical_patient(third, bridge)
+
+            self.assertEqual(conflict.exception.code, "registry_cluster_conflict")
+            self.assertEqual(
+                registry.find_candidates(
+                    "hospital_identifier", "HOSPITAL-A-1", "hospital-a"
+                ),
+                (first,),
+            )
+            self.assertEqual(
+                registry.find_candidates(
+                    "hospital_identifier", "HOSPITAL-A-2", "hospital-a"
+                ),
+                (third,),
+            )
+
+    def test_cluster_merge_allows_different_hospital_namespaces(self) -> None:
+        with EncryptedIdentityRegistry.temporary(
+            _SECRET, Path(self.parent.name)
+        ) as registry:
+            first = _create_hospital_record(
+                registry, "row:0", "HOSPITAL-A-1", "hospital-a"
+            )
+            second = _create_hospital_record(
+                registry, "row:1", "HOSPITAL-B-1", "hospital-b"
+            )
+
+            registry.set_canonical_patient(second, first)
+
+            self.assertEqual(
+                registry.find_candidates(
+                    "hospital_identifier", "HOSPITAL-B-1", "hospital-b"
+                ),
+                (first,),
+            )
 
     def test_empty_secret_is_rejected_and_closed_registry_cannot_be_reused(self) -> None:
         with self.assertRaises(ProcessingError) as missing_secret:
