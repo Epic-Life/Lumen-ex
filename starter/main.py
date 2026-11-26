@@ -58,7 +58,7 @@ def pseudonym(patient_key: str) -> str:
     """Stable, non-reversible ID: HMAC-SHA256 keyed with RAKSHA_SECRET (never a plain hash).
 
     Same key + same secret -> same ID in every file. A different secret -> a different ID.
-    patient_key should be YOUR canonical identity for a cluster of records (see link_records).
+    The canonical patient key identifies one cluster of records within the input.
     """
     digest = hmac.new(SECRET, patient_key.encode("utf-8"), hashlib.sha256).digest()
     n = int.from_bytes(digest[:5], "big")
@@ -106,8 +106,6 @@ PATTERNS = [
 
 class Stats:
     identifiers = 0
-    records = 0
-    linked = 0
     generalized = 0
     suppressed = 0
 
@@ -136,17 +134,6 @@ def clean_value(v, text_detector=None):
     return v  # numbers, booleans, null keep their type
 
 
-# --------------------------------------------------------------------------- linkage
-def link_records(_record_text: str):
-    """Return a canonical patient key for a record, or None when the evidence is too weak.
-
-    TODO(team): blocking + fuzzy/phonetic + cross-script matching across ALL files, then cluster
-    without transitive over-merging. Two different people with the same name must stay apart.
-    A wrong link costs more than no link, so the starter links nothing.
-    """
-    return None
-
-
 # --------------------------------------------------------------------------- I/O
 def decode(raw: bytes) -> str | None:
     if raw.startswith(b"\xef\xbb\xbf"):
@@ -161,23 +148,80 @@ def decode(raw: bytes) -> str | None:
     return None
 
 
-def process_csv(
-    text: str, delimiter: str, rel: str, records: list, text_detector=None, private_column=None,
-) -> str:
+def parse_csv(text: str, delimiter: str) -> tuple[list, list]:
     rows = list(csv.reader(io.StringIO(text, newline=""), delimiter=delimiter, strict=True))
     if not rows:
-        return ""
+        return [], []
     header, body = rows[0], rows[1:]
     if not header or any(len(row) != len(header) for row in body):
         raise ValueError("invalid_csv_row_width")
+    return header, body
+
+
+def json_records(data):
+    """Identify the JSON objects that share a records.jsonl locator."""
+    if not isinstance(data, dict) or data.get("resourceType") == "Bundle":
+        yield "doc", data
+        return
+    found = False
+    for key, value in data.items():
+        if isinstance(value, list) and value and all(isinstance(item, dict) for item in value):
+            found = True
+            pointer_key = key.replace("~", "~0").replace("/", "~1")
+            for index, item in enumerate(value):
+                yield f"/{pointer_key}/{index}", item
+    if not found:
+        yield "doc", data
+
+
+def input_records(paths, input_root):
+    """Read the same logical units used by the writer before transforming identifiers."""
+    for path in paths:
+        rel = path.relative_to(input_root).as_posix()
+        ext = path.suffix.lower()
+        if ext not in {".csv", ".tsv", ".json", ".txt"}:
+            continue
+        try:
+            text = read_text(path.read_bytes())
+            if ext in {".csv", ".tsv"}:
+                header, body = parse_csv(text, "\t" if ext == ".tsv" else ",")
+                for index, row in enumerate(body):
+                    yield rel, f"row:{index}", dict(zip(header, row))
+            elif ext == ".json":
+                for locator, record in json_records(json.loads(text)):
+                    if isinstance(record, dict):
+                        yield rel, locator, record
+            else:
+                yield rel, "doc", text
+        except (ValueError, RecursionError, UnicodeError, csv.Error):
+            continue
+
+
+def read_text(raw: bytes) -> str:
+    if not raw.strip():
+        raise ValueError("empty_file")
+    text = decode(raw)
+    if text is None:
+        raise ValueError("undecodable_text")
+    return text
+
+
+def process_csv(text, delimiter, rel, records, text_detector, private_column, patient_ids):
+    header, body = parse_csv(text, delimiter)
+    if not header:
+        return ""
     buf = io.StringIO()
-    w = csv.writer(buf, delimiter=delimiter, lineterminator="\n")
-    w.writerow(header)  # TODO(team): rename a header only if it contains PII
+    writer = csv.writer(buf, delimiter=delimiter, lineterminator="\n")
+    pids = [patient_ids.get((rel, f"row:{i}")) for i in range(len(body))]
+    writer.writerow(header)
     private_fields = [bool(private_column and private_column(column)) for column in header]
-    for i, row in enumerate(body):
-        key = link_records(delimiter.join(row))
-        pid = pseudonym(key) if key else None
-        # TODO(team): write pid into the row's patient column so it appears INSIDE the record
+    patient_column = next(
+        (index for index, column in enumerate(header)
+         if private_fields[index] and re.sub(r"[^a-z0-9]", "", column.casefold())
+         in {"patientid", "uhid", "mrn", "regno", "patientname", "naam"}),
+        None,
+    )
+    for i, (row, pid) in enumerate(zip(body, pids)):
         cleaned = []
         for cell, is_private in zip(row, private_fields):
             if cell.strip() and is_private:
@@ -185,35 +229,56 @@ def process_csv(
                 Stats.identifiers += 1
             else:
                 cleaned.append(clean_text(cell, text_detector))
-        w.writerow(cleaned)
+        if pid and patient_column is not None:
+            cleaned[patient_column] = pid
+        else:
+            pid = None
+        writer.writerow(cleaned)
         records.append({"file": f"sanitized/{rel}", "loc": f"row:{i}", "patient": pid})
-        Stats.records += 1
-        Stats.linked += pid is not None
     return buf.getvalue()
 
 
-def process_json(text: str, rel: str, records: list, text_detector=None) -> str:
-    data = json.loads(text)
-    is_doc = not isinstance(data, dict) or data.get("resourceType") == "Bundle" or not any(
-        isinstance(v, list) and v and all(isinstance(x, dict) for x in v) for v in data.values())
-    if is_doc:  # FHIR Bundle or single object: one record for the whole file
-        records.append({"file": f"sanitized/{rel}", "loc": "doc", "patient": None})
-        Stats.records += 1
+def embed_json_patient(record, pid):
+    resource_type = record.get("resourceType")
+    if resource_type == "Bundle":
+        for entry in record["entry"]:
+            resource = entry.get("resource") if isinstance(entry, dict) else None
+            if isinstance(resource, dict) and resource.get("resourceType") == "Patient":
+                return embed_json_patient(resource, pid)
+        return False
+    if resource_type == "Patient":
+        identifiers = record.setdefault("identifier", [])
+        if not isinstance(identifiers, list):
+            return False
+        identifiers.append({"value": pid})
+        return True
+    if resource_type:
+        return False
+    if isinstance(record.get("patient_ref"), str):
+        record["patient_ref"] = pid
     else:
-        for k, v in data.items():
-            if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
-                for i, _ in enumerate(v):
-                    pointer_key = k.replace("~", "~0").replace("/", "~1")
-                    records.append({"file": f"sanitized/{rel}", "loc": f"/{pointer_key}/{i}", "patient": None})
-                    Stats.records += 1
-    # TODO(team): FHIR must stay a valid R4 Bundle whose references resolve
+        key = "raksha_patient_ref"
+        while key in record:
+            key += "_"
+        record[key] = pid
+    return True
+
+
+def process_json(text, rel, records, text_detector, patient_ids):
+    data = json.loads(text)
+    for locator, record in json_records(data):
+        pid = patient_ids.get((rel, locator)) if isinstance(record, dict) else None
+        if pid and not embed_json_patient(record, pid):
+            pid = None
+        records.append({"file": f"sanitized/{rel}", "loc": locator, "patient": pid})
     return json.dumps(clean_value(data, text_detector), ensure_ascii=False, indent=2) + "\n"
 
 
-def process_text(text: str, rel: str, records: list, text_detector=None) -> str:
-    records.append({"file": f"sanitized/{rel}", "loc": "doc", "patient": None})
-    Stats.records += 1
-    return clean_text(text, text_detector)
+def process_text(text, rel, records, text_detector, patient_ids):
+    pid = patient_ids.get((rel, "doc"))
+    records.append({"file": f"sanitized/{rel}", "loc": "doc", "patient": pid})
+    cleaned = clean_text(text, text_detector)
+    return f"Patient reference: {pid}\n{cleaned}" if pid else cleaned
 
 
 def peak_rss_mb() -> float:
@@ -233,14 +298,20 @@ def main() -> int:
     return run(Path(a.input), Path(a.output))
 
 
-def run(inp: Path, out: Path, *, text_detector=None, private_column=None) -> int:
+def run(inp: Path, out: Path, *, text_detector=None, private_column=None, build_link_index=None) -> int:
     t0 = time.monotonic()
+    Stats.identifiers = 0
     san = out / "sanitized"
     san.mkdir(parents=True, exist_ok=True)
     files, records = [], []
     sys.setrecursionlimit(5000)
 
-    for path in sorted(p for p in inp.rglob("*") if p.is_file()):
+    paths = sorted(path for path in inp.rglob("*") if path.is_file())
+    patient_ids = {
+        location: pseudonym(key)
+        for location, key in build_link_index(input_records(paths, inp)).items()
+    } if build_link_index else {}
+    for path in paths:
         rel = path.relative_to(inp).as_posix()
         raw = path.read_bytes()
         entry = {"input_sha256": hashlib.sha256(raw).hexdigest()}
@@ -248,18 +319,14 @@ def run(inp: Path, out: Path, *, text_detector=None, private_column=None) -> int
         try:
             if ext not in (".csv", ".tsv", ".json", ".txt"):
                 raise ValueError("unsupported_format")
-            if not raw.strip():
-                raise ValueError("empty_file")
-            text = decode(raw)
-            if text is None:
-                raise ValueError("undecodable_text")
+            text = read_text(raw)
             # TODO(team): a file NAME can contain PII: rename it and report the new path
             if ext in (".csv", ".tsv"):
-                result = process_csv(text, "\t" if ext == ".tsv" else ",", rel, records, text_detector, private_column)
+                result = process_csv(text, "\t" if ext == ".tsv" else ",", rel, records, text_detector, private_column, patient_ids)
             elif ext == ".json":
-                result = process_json(text, rel, records, text_detector)
+                result = process_json(text, rel, records, text_detector, patient_ids)
             else:
-                result = process_text(text, rel, records, text_detector)
+                result = process_text(text, rel, records, text_detector, patient_ids)
             dest = san / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(result, encoding="utf-8", newline="")

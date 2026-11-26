@@ -99,6 +99,8 @@ _ALIASES: dict[str, frozenset[str]] = {
         {
             "patientid",
             "patientidentifier",
+            "patientref",
+            "regno",
             "hospitalid",
             "hospitalpatientid",
             "uhid",
@@ -118,6 +120,7 @@ _ALIASES: dict[str, frozenset[str]] = {
             "aadharnumber",
             "abha",
             "abhanumber",
+            "abhano",
             "abhaaddress",
             "pan",
             "governmentid",
@@ -149,6 +152,7 @@ _EXCLUDED_NAME_CONTEXTS = {
 _NOTE_LABELS: dict[str, tuple[str, ...]] = {
     "name": (
         "patient name",
+        "patient",
         "full name",
         r"name",
         "रोगी का नाम",
@@ -179,7 +183,7 @@ _NOTE_PATTERN = re.compile(
         r"\s+".join(re.escape(part) for part in label.split())
         for label, _ in _NOTE_LABEL_ALTERNATIVES
     )
-    + r")\s*[:：=\-]\s*(?P<value>[^\r\n]+)"
+    + r")\s*[:：=\-]\s*(?P<value>[^\r\n;|]+)"
 )
 _NOTE_LABEL_LOOKUP = {
     re.sub(r"[^\w]+", "", label.casefold()): field_name

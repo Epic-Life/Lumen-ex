@@ -4,6 +4,7 @@ from pathlib import Path
 
 from lumen_ex.config import PipelineConfig
 from lumen_ex.label_redaction import is_private_column, redact_labeled_names
+from lumen_ex.linkage import build_link_index
 
 
 def run_sanitizer(input_root: Path, output_root: Path, config: PipelineConfig) -> int:
@@ -21,6 +22,7 @@ def run_sanitizer(input_root: Path, output_root: Path, config: PipelineConfig) -
             output_root,
             text_detector=redact_labeled_names,
             private_column=is_private_column,
+            build_link_index=build_link_index,
         )
     finally:
         starter.POLICY = previous_policy

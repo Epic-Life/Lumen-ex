@@ -23,7 +23,7 @@ _PRIVATE_COLUMNS = frozenset({
     "aadhaar", "aadhaarno", "aadhar", "abha", "abhano", "address",
     "dob", "dobmmddyyyy", "email", "firstname", "guardian",
     "janmtithi", "lastname", "mobileno", "mobile", "naam", "pan",
-    "patientid", "patientname", "payerspan", "payerpan", "phone",
+    "mrn", "patientid", "patientname", "payerspan", "payerpan", "phone",
     "pin", "pincode", "pitapatikanaam", "pmjayid", "policyno", "regno",
     "relativename", "street", "uhid", "villagemohalla", "gaon", "pata", "zip",
 })

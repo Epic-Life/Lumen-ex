@@ -23,10 +23,11 @@ read it, and this foundation does not import it.
 - Quarantine unsupported or unsafe files; never silently pass them through as clean.
 - Preserve clinical values according to the official specification.
 
-These are project requirements, not claims that the current baseline achieves them.
-The shipped starter only provides basic regex replacement, no record linkage, and
-incomplete handling of hidden PII channels. The foundation intentionally retains it
-without expanding those algorithms.
+The CLI indexes identity evidence across the input before sanitizing records.
+Linkage uses matching identifier values or a normalized full name corroborated
+by a phone number or date of birth. Records with insufficient evidence stay
+unlinked. The release secret keys the pseudonyms written into the sanitized
+records and the record index.
 
 ## Setup
 
@@ -80,7 +81,8 @@ lumen_ex/
   contracts/identity.py    compact identity projection contracts
   identity.py              identity extraction and field normalization
   detection/indic_names.py Devanagari-aware candidate name normalization
-  baseline.py              compatibility adapter for the shipped starter
+  linkage.py               cross-file patient matching
+  baseline.py              file processing with detection and linkage
 starter/                   official starter and policy (preserved)
 tests/                     standard-library foundation tests
 docs/architecture.md       responsibilities, boundaries, and data flow
