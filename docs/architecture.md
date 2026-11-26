@@ -33,7 +33,7 @@ limitations; it is not a production-ready firewall.
 | Identity extraction and normalization | `lumen_ex.identity` projects parsed row/object values, FHIR R4 Patient resources, or labeled note fields into a compact `PatientIdentity`. Original values, normalized values, missing/invalid fields, and source locators are retained without copying full records. |
 | Identity registry storage | `lumen_ex.registry.EncryptedIdentityRegistry` stores encrypted evidence in one per-run SQLite database and keyed block indexes for candidate retrieval. It is shared across batches and removes its private database directory on close. |
 | Indic name normalization | `lumen_ex.detection.indic_names` normalizes supplied Latin/Devanagari name candidates with ITRANS transliteration, Unicode, punctuation, and a small honorific vocabulary. It preserves initials and token order; name equality is not proof of identity. |
-| Record linkage | Decide LINK, DO_NOT_LINK, or ABSTAIN separately from detection. `Linker.decide` returns `LinkageDecision`. No matcher is implemented. |
+| Candidate matching | `lumen_ex.matching.IdentityMatcher` retrieves a bounded set of exact indexed candidates and scores corroborating evidence. Names alone never link; ambiguous or weak evidence stays unresolved, and same-namespace hospital-ID conflicts block links. The matcher returns a decision only; it does not persist mappings or merge patients. |
 | Privacy transformation | Transform a normalized record using detection and linkage outputs. `PrivacyTransformer.transform` returns `SanitizationResult`. No anonymization is implemented. |
 | Leak scanning / security | Check transformed results before release; unsafe results must not reach output. `LeakScanner.is_safe` is fail-closed in the coordinator. |
 | Output writing | Serialize approved results while preserving the official output contract. `OutputWriter` is the format-specific boundary. |
@@ -53,10 +53,12 @@ validation remains an export responsibility. Free-text extraction is limited to
 explicit field labels; it is not a general name recognizer and does not perform record
 linking. The reader is not yet wired into the production CLI.
 
-The registry provides encrypted storage and exact keyed block lookup only. It does not
-make matching or merge decisions; confidence scoring and global reconciliation are
-separate later stages. Its database is per-run and must be closed to remove the
-encrypted database and SQLite sidecars.
+The registry provides encrypted storage, exact keyed block lookup, and streaming
+candidate iteration. Candidate scoring is a separate stage and does not merge patients.
+Global cluster reconciliation remains a later stage. The matcher uses a bounded
+candidate set; overflow is unresolved rather than truncated to a potentially misleading
+best match. Its database is per-run and must be closed to remove the encrypted database
+and SQLite sidecars.
 
 ## Operational constraints
 

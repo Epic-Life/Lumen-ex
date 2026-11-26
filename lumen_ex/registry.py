@@ -302,6 +302,42 @@ class EncryptedIdentityRegistry:
         for row in rows:
             yield row[0]
 
+    def iter_resolved_candidate_ids(
+        self, kind: str, value: str, namespace: str = ""
+    ) -> Iterator[str]:
+        """Stream candidate IDs after following any existing canonical aliases."""
+        for patient_id in self.iter_candidate_ids(kind, value, namespace):
+            yield self._resolve_patient(patient_id)
+
+    def has_conflicting_block(
+        self, patient_id: str, kind: str, value: str, namespace: str = ""
+    ) -> bool:
+        """Check for a different indexed value in the same patient namespace."""
+        self._ensure_open()
+        if not kind or not value:
+            return False
+        if not self._patient_exists(patient_id):
+            raise ProcessingError("registry_reference_invalid")
+        namespace_token = _hmac_digest(
+            self._index_key, b"namespace\x00" + namespace.encode("utf-8")
+        )
+        value_token = _hmac_digest(
+            self._index_key,
+            b"block\x00" + kind.encode("utf-8") + b"\x00" + value.encode("utf-8"),
+        )
+        row = self._execute(
+            "WITH RECURSIVE patient_family(patient_id) AS ("
+            "SELECT ? UNION ALL "
+            "SELECT patients.patient_id FROM patients "
+            "JOIN patient_family ON patients.canonical_id = patient_family.patient_id"
+            ") "
+            "SELECT 1 FROM block_index "
+            "WHERE patient_id IN (SELECT patient_id FROM patient_family) "
+            "AND kind = ? AND namespace_token = ? AND value_token != ? LIMIT 1",
+            (patient_id, kind, namespace_token, value_token),
+        ).fetchone()
+        return row is not None
+
     def get_record_mapping(
         self, source_sha256: str, record_locator: str
     ) -> RegistryRecordMapping | None:
