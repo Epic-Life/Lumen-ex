@@ -15,6 +15,7 @@ SAFE_ERROR_CODES = frozenset(
         "leak_scan_failed",
         "unsupported_format",
         "empty_file",
+        "CSVError",
         "undecodable_text",
         "RecursionError",
         "UnicodeDecodeError",

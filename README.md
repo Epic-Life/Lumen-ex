@@ -32,7 +32,7 @@ without expanding those algorithms.
 
 Python 3.10 or later is required. Runtime dependencies are
 `indic-transliteration` for offline Indic-script transliteration and `phonenumbers`
-for offline phone validation and normalization.
+for offline phone validation and normalization, plus `ijson` for bounded JSON parsing.
 
 ```powershell
 python -m venv .venv
@@ -78,6 +78,7 @@ lumen_ex/
   stages.py                future module interfaces
   contracts/models.py      pipeline data contracts
   contracts/identity.py    compact identity projection contracts
+  ingestion.py             bounded file discovery and record readers
   identity.py              identity extraction and field normalization
   detection/indic_names.py Devanagari-aware candidate name normalization
   baseline.py              compatibility adapter for the shipped starter
