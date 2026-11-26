@@ -1,0 +1,35 @@
+"""Compact identity data contracts for future candidate-retrieval stages."""
+
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class IdentityValue:
+    """One extracted source value and its conservative normalized form."""
+
+    original: str = field(repr=False)
+    normalized: str | None = field(repr=False)
+    source_key: str = field(default="", repr=False)
+
+
+@dataclass(frozen=True)
+class PatientIdentity:
+    """Identity-only projection of a record; never retains the complete record."""
+
+    source_file: str = field(repr=False)
+    record_locator: str = field(repr=False)
+    name: tuple[IdentityValue, ...] = ()
+    date_of_birth: tuple[IdentityValue, ...] = ()
+    age: tuple[IdentityValue, ...] = ()
+    gender: tuple[IdentityValue, ...] = ()
+    phone: tuple[IdentityValue, ...] = ()
+    address: tuple[IdentityValue, ...] = ()
+    location: tuple[IdentityValue, ...] = ()
+    hospital_identifier: tuple[IdentityValue, ...] = ()
+    government_identifier: tuple[IdentityValue, ...] = ()
+    missing_fields: frozenset[str] = frozenset()
+    invalid_fields: frozenset[str] = frozenset()
+    normalization_metadata: tuple[tuple[str, str], ...] = ()
+
+
+__all__ = ["IdentityValue", "PatientIdentity"]

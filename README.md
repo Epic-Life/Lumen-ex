@@ -30,8 +30,9 @@ without expanding those algorithms.
 
 ## Setup
 
-Python 3.10 or later is required. There are no runtime or development dependencies
-beyond the Python standard library.
+Python 3.10 or later is required. Runtime dependencies are
+`indic-transliteration` for offline Indic-script transliteration and `phonenumbers`
+for offline phone validation and normalization.
 
 ```powershell
 python -m venv .venv
@@ -75,7 +76,10 @@ lumen_ex/
   config.py                validated policy loading
   pipeline.py              injectable minimal stage coordinator
   stages.py                future module interfaces
-  contracts/models.py      internal shared data contracts
+  contracts/models.py      pipeline data contracts
+  contracts/identity.py    compact identity projection contracts
+  identity.py              identity extraction and field normalization
+  detection/indic_names.py Devanagari-aware candidate name normalization
   baseline.py              compatibility adapter for the shipped starter
 starter/                   official starter and policy (preserved)
 tests/                     standard-library foundation tests
