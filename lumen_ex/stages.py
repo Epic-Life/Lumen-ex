@@ -5,6 +5,7 @@ from typing import Iterable, Iterator, Protocol
 
 from lumen_ex.contracts.models import (
     DetectionResult,
+    IngestionResult,
     InputFileMetadata,
     LinkageDecision,
     NormalizedRecord,
@@ -16,6 +17,8 @@ from lumen_ex.contracts.models import (
 
 
 class Ingestor(Protocol):
+    def ingest(self, input_root: Path) -> IngestionResult: ...
+
     def discover(self, input_root: Path) -> Iterable[InputFileMetadata]: ...
 
     def read(self, source: InputFileMetadata) -> Iterator[ParsedRecord]: ...

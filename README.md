@@ -1,9 +1,10 @@
 # Lumen-ex
 
 Lumen-ex is an offline, CPU-only, LLM-free healthcare-data privacy firewall project
-for the Secret Wards hackathon track. This milestone establishes the submission
-foundation and modular contracts only. It does **not** implement a complete firewall,
-PII detector, patient matcher, anonymizer, or privacy-scoring engine.
+for the Secret Wards hackathon track. The repository includes its submission
+foundation, a file-ingestion API, and separate identity/matching helpers; the
+submission CLI still uses the starter adapter. The project does **not** yet implement
+a complete privacy firewall, PII detection pipeline, anonymization, or privacy scoring.
 
 The official challenge kit is included in this repository. Read [START_HERE.md](START_HERE.md)
 and the official [problem statement](docs/PROBLEM_STATEMENT.md),
@@ -24,9 +25,9 @@ read it, and this foundation does not import it.
 - Preserve clinical values according to the official specification.
 
 These are project requirements, not claims that the current baseline achieves them.
-The shipped starter only provides basic regex replacement, no record linkage, and
-incomplete handling of hidden PII channels. The foundation intentionally retains it
-without expanding those algorithms.
+The shipped submission CLI still uses the starter adapter, which provides basic regex
+replacement and has incomplete handling of hidden PII channels. The ingestion API is
+available to the modular pipeline but does not change the official CLI output path.
 
 ## Setup
 
@@ -75,17 +76,17 @@ config/policy.yaml         validated policy settings
 lumen_ex/
   cli.py                   arguments, configuration, safe diagnostics
   config.py                validated policy loading
-  pipeline.py              injectable minimal stage coordinator
+  pipeline.py              injectable stage coordinator and ingestion entry point
   stages.py                future module interfaces
   contracts/models.py      pipeline data contracts
   contracts/identity.py    compact identity projection contracts
-  ingestion.py             bounded file discovery and record readers
+  ingestion.py             deterministic discovery, quarantine outcomes, and readers
   identity.py              identity extraction and field normalization
   registry.py              encrypted per-run registry storage
   detection/indic_names.py Devanagari-aware candidate name normalization
   baseline.py              compatibility adapter for the shipped starter
 starter/                   official starter and policy (preserved)
-tests/                     standard-library foundation tests
+tests/                     foundation and ingestion tests
 docs/architecture.md       responsibilities, boundaries, and data flow
 docs/contracts.md          internal models and official format compatibility
 docs/decisions/            material architecture decisions

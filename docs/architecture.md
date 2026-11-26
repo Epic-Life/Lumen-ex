@@ -1,4 +1,4 @@
-# Lumen-ex architecture (Milestone 01)
+# Lumen-ex architecture (foundation and ingestion)
 
 Lumen-ex is a single-process Python application. It runs locally, offline, on CPU;
 there are no services, model downloads, or runtime network dependencies. The root
@@ -12,12 +12,14 @@ called through a narrow compatibility adapter.
 raksha.toml → main.py / CLI → validated policy
                             → starter compatibility adapter (current baseline)
 
-Future processing flow:
-input discovery → ingestion → normalization → PII detection → record linkage
+Modular processing flow:
+Pipeline.ingest_directory → per-file ingestion outcomes → parsed records
+Parsed records → normalization → PII detection → record linkage
                 → privacy transformation → leak scan → output writer → report
 ```
 
-The second flow describes extension points, not implemented privacy functionality.
+The later stages are extension points, not implemented privacy functionality in this
+ingestion milestone.
 The current adapter preserves the shipped starter's basic behavior and its known
 limitations; it is not a production-ready firewall.
 
@@ -26,9 +28,9 @@ limitations; it is not a production-ready firewall.
 | Area | Responsibility and expected interface |
 |---|---|
 | CLI / orchestration | Parse submission arguments, load validated settings, enforce safe path relationships, and invoke the pipeline. `lumen_ex.cli.main` is the executable interface. |
-| Input discovery / ingestion | `lumen_ex.ingestion.StreamingIngestor` enumerates files deterministically, hashes them in chunks, and streams CSV/TSV rows, supported JSON record arrays, FHIR Patient resources, and note documents with stable locators. |
+| Input discovery / ingestion | `lumen_ex.ingestion.StreamingIngestor` walks inputs in stable order, rejects symlinks, hashes source files in chunks, detects supported encodings, prevalidates each file, and returns per-file ingestion or quarantine outcomes. CSV/TSV rows retain raw headers/cells; JSON record arrays use escaped JSON Pointers; standalone FHIR R4 resources, complete FHIR Bundles, and text files use `doc`. Parsed records are lazy and record values are hidden from repr. |
 | Shared contracts | Hold file metadata, normalized records, typed processing outcomes, linkage decisions, manifest entries, and aggregate reports without depending on format-specific algorithms. |
-| Normalization | Normalize representation while retaining source locators and medical values. `Normalizer.normalize` accepts and returns a `NormalizedRecord`. |
+| Normalization | Normalize representation while retaining source locators and medical values. `Normalizer.normalize` accepts a `ParsedRecord` and returns a `NormalizedRecord`. |
 | PII detection | Produce counts and typed findings without deciding identity. `Detector.detect` returns `DetectionResult`. No detector is implemented in this milestone. |
 | Identity extraction and normalization | `lumen_ex.identity` projects parsed row/object values, FHIR R4 Patient resources, or labeled note fields into a compact `PatientIdentity`. Original values, normalized values, missing/invalid fields, and source locators are retained without copying full records. |
 | Identity registry storage | `lumen_ex.registry.EncryptedIdentityRegistry` stores encrypted evidence in one per-run SQLite database and keyed block indexes for candidate retrieval. It is shared across batches and removes its private database directory on close. |
@@ -46,12 +48,15 @@ sanitized results to the writer, reports every result, and then finalizes the re
 Its stage dependencies are injected, so later milestones can add implementations
 without changing the contracts or creating microservices.
 
-The identity helpers consume parsed values from the ingestion boundary. File reading is
-streamed, but the current JSON record-array discovery is intentionally limited to common
-collection keys and whole-document JSON values are materialized as one record. FHIR
-validation remains an export responsibility. Free-text extraction is limited to
-explicit field labels; it is not a general name recognizer and does not perform record
-linking. The reader is not yet wired into the production CLI.
+The identity helpers consume parsed values from the ingestion boundary. JSON discovery
+selects root arrays and arrays under common collection keys; otherwise a JSON document
+is one record. Each file is prevalidated before the lazy record stream is exposed, and
+one unsupported or malformed file does not prevent outcomes for other files. The
+ingestor performs basic FHIR resource and Bundle structure checks, not full profile or
+terminology validation. Free-text extraction is limited to explicit field labels; it is
+not a general name recognizer and does not perform record linking. The ingestion API is
+available through `Pipeline.ingest_directory`, but the production CLI still uses the
+starter adapter to preserve its official output behavior.
 
 The registry provides encrypted storage, exact keyed block lookup, and streaming
 candidate iteration. Candidate scoring is a separate stage and does not merge patients.
@@ -62,8 +67,8 @@ and SQLite sidecars.
 
 ## Operational constraints
 
-The command requires `RAKSHA_SECRET` and does not print or persist it. Logs are limited
-to safe error codes and aggregate starter counts. Processing errors carry codes rather
-than source text. Unsupported or malformed inputs continue to be quarantined by the
-existing starter. These are engineering choices, not a claim that the current baseline
-removes PII reliably or provides a complete security guarantee.
+The command requires `RAKSHA_SECRET` and does not print or persist it. Logs are limited to safe error codes and aggregate starter counts. Processing errors
+carry codes rather than source text. The ingestion API returns safe per-file error codes
+without raw file contents; it does not write or modify input files. These are
+engineering choices, not a claim that the current baseline removes PII reliably or
+provides a complete security guarantee.

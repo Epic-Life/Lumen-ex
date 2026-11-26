@@ -1,4 +1,4 @@
-# Shared contracts (Milestone 01)
+# Shared contracts (foundation and ingestion)
 
 Internal Python dataclasses and enums live in `lumen_ex.contracts.models`. They are
 deliberately separate from on-disk submission formats so pipeline code can evolve
@@ -7,9 +7,16 @@ without changing the evaluator interface.
 ## Internal records
 
 - `InputFileMetadata`: relative source path (hidden from its repr), SHA-256, byte size,
-  and optional media type.
-- `ParsedRecord`: one decoded/parsed record unit, with values hidden from repr until a
-  normalizer produces the downstream representation.
+  media type, detected format, and encoding. `source_id` is a deterministic digest of
+  the relative path and input hash.
+- `ParsedRecord`: one parsed record unit with a source locator and hidden values.
+  `structure` can preserve source shape such as original CSV headers and cells; its
+  `record_id` is derived from the source digest and locator.
+- `IngestionFileResult`, `IngestionStatus`, and `IngestionStatistics`: per-file success
+  or quarantine with a safe error code, record counts, and aggregate file/byte totals.
+- `IngestionResult`: ordered file outcomes and a lazy iterator over records from files
+  that passed prevalidation. Callers must inspect file outcomes rather than assuming
+  every discovered file was ingested.
 - `NormalizedRecord`: source metadata, a source locator, and parsed fields. Field values
   are excluded from repr to reduce accidental logging exposure.
 - `DetectionResult`: non-negative detection totals and optional entity-type counts.
@@ -46,11 +53,13 @@ resource or Bundle. The helpers do not decode files or guess unlabeled names.
 
 Protocols in `lumen_ex.stages` define the boundaries for ingestion, normalization,
 detection, linkage, privacy transformation, leak scanning, writing, and reporting.
-these are interface contracts only; the algorithms and I/O implementations are later
-milestones. The minimal coordinator receives normalization, detection, linkage,
+These are interface contracts; file ingestion is the implementation scope of this
+milestone, while existing identity/matching helpers remain separate. The coordinator
+exposes `Pipeline.ingest_directory` and receives normalization, detection, linkage,
 transformation, leak-scanning, output-writing, and reporting implementations through
-`PipelineStages`. It writes only a result marked sanitized after the leak scanner accepts
-it, records every status for reporting, and finalizes a manifest after processing.
+`PipelineStages`. It writes only a result marked sanitized after the leak scanner
+accepts it, records every status for reporting, and finalizes a manifest after
+processing.
 
 ## Official output compatibility
 

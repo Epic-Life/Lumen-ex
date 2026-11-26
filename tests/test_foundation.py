@@ -13,8 +13,8 @@ from lumen_ex.contracts.models import (
     InputFileMetadata,
     LinkageAction,
     LinkageDecision,
-    NormalizedRecord,
     OutputManifestEntry,
+    ParsedRecord,
     PipelineReport,
     ProcessingStatus,
     SanitizationResult,
@@ -336,13 +336,13 @@ class CliTests(unittest.TestCase):
             self.assertNotIn(str(input_root), completed.stderr)
 
 
-def _record() -> NormalizedRecord:
+def _record() -> ParsedRecord:
     metadata = InputFileMetadata(
         relative_path="records/note.txt",
         sha256=hashlib.sha256(b"note").hexdigest(),
         size_bytes=4,
     )
-    return NormalizedRecord(metadata, "doc", {"text": "hidden content"})
+    return ParsedRecord(metadata, "doc", {"text": "hidden content"})
 
 
 if __name__ == "__main__":

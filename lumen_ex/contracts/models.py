@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
+import hashlib
+from collections.abc import Iterator
 import re
 
 from lumen_ex.errors import SAFE_ERROR_CODES
@@ -29,12 +31,28 @@ class LinkageAction(str, Enum):
     ABSTAIN = "ABSTAIN"
 
 
+class InputFormat(str, Enum):
+    CSV = "csv"
+    TSV = "tsv"
+    JSON = "json"
+    FHIR = "fhir"
+    TEXT = "text"
+    UNSUPPORTED = "unsupported"
+
+
+class IngestionStatus(str, Enum):
+    INGESTED = "ingested"
+    QUARANTINED = "quarantined"
+
+
 @dataclass(frozen=True)
 class InputFileMetadata:
     relative_path: str = field(repr=False)
     sha256: str
     size_bytes: int
     media_type: str | None = None
+    detected_format: InputFormat | None = None
+    encoding: str | None = None
 
     def __post_init__(self) -> None:
         if not _safe_relative_path(self.relative_path):
@@ -44,12 +62,102 @@ class InputFileMetadata:
         if self.size_bytes < 0:
             raise ValueError("input_size_invalid")
 
+    @property
+    def source_id(self) -> str:
+        identity = f"{self.relative_path}\0{self.sha256}".encode("utf-8")
+        return hashlib.sha256(identity).hexdigest()
+
 
 @dataclass(frozen=True)
 class ParsedRecord:
     source: InputFileMetadata
-    locator: str
-    values: dict[str, object] = field(repr=False)
+    locator: str = field(repr=False)
+    values: object = field(repr=False)
+    structure: dict[str, object] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        if not self.locator:
+            raise ValueError("record_locator_invalid")
+
+    @property
+    def record_id(self) -> str:
+        return f"{self.source.source_id}:{self.locator}"
+
+
+@dataclass(frozen=True)
+class IngestionFileResult:
+    relative_path: str = field(repr=False)
+    source: InputFileMetadata | None
+    status: IngestionStatus
+    record_count: int = 0
+    error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        if not _safe_relative_path(self.relative_path):
+            raise ValueError("input_path_invalid")
+        if self.record_count < 0:
+            raise ValueError("ingestion_record_count_invalid")
+        if self.source is not None and self.source.relative_path != self.relative_path:
+            raise ValueError("ingestion_source_mismatch")
+        if self.status is IngestionStatus.QUARANTINED:
+            if self.error_code is None:
+                raise ValueError("ingestion_error_required")
+        elif self.error_code is not None:
+            raise ValueError("ingestion_error_status_invalid")
+        elif self.source is None:
+            raise ValueError("ingestion_source_required")
+        if self.error_code is not None and self.error_code not in SAFE_ERROR_CODES:
+            raise ValueError("error_code_invalid")
+        if self.status is IngestionStatus.QUARANTINED and self.record_count:
+            raise ValueError("quarantined_record_count_invalid")
+
+
+@dataclass(frozen=True)
+class IngestionStatistics:
+    files_discovered: int
+    files_ingested: int
+    files_quarantined: int
+    records_parsed: int
+    bytes_scanned: int
+
+    def __post_init__(self) -> None:
+        values = (
+            self.files_discovered,
+            self.files_ingested,
+            self.files_quarantined,
+            self.records_parsed,
+            self.bytes_scanned,
+        )
+        if any(value < 0 for value in values):
+            raise ValueError("ingestion_statistic_invalid")
+        if self.files_ingested + self.files_quarantined != self.files_discovered:
+            raise ValueError("ingestion_file_totals_invalid")
+
+
+@dataclass(frozen=True)
+class IngestionResult:
+    files: tuple[IngestionFileResult, ...]
+    records: Iterator[ParsedRecord] = field(repr=False, compare=False)
+    statistics: IngestionStatistics
+
+    def __post_init__(self) -> None:
+        if len(self.files) != self.statistics.files_discovered:
+            raise ValueError("ingestion_file_totals_invalid")
+        if sum(item.status is IngestionStatus.INGESTED for item in self.files) != (
+            self.statistics.files_ingested
+        ):
+            raise ValueError("ingestion_file_totals_invalid")
+        if sum(item.status is IngestionStatus.QUARANTINED for item in self.files) != (
+            self.statistics.files_quarantined
+        ):
+            raise ValueError("ingestion_file_totals_invalid")
+        if sum(item.record_count for item in self.files) != self.statistics.records_parsed:
+            raise ValueError("ingestion_record_totals_invalid")
+        scanned_bytes = sum(
+            item.source.size_bytes for item in self.files if item.source is not None
+        )
+        if scanned_bytes != self.statistics.bytes_scanned:
+            raise ValueError("ingestion_byte_totals_invalid")
 
 
 @dataclass(frozen=True)

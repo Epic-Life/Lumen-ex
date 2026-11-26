@@ -1,21 +1,25 @@
 """Small fail-closed coordinator over injected, replaceable processing stages."""
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
 from lumen_ex.contracts.models import (
     DetectionResult,
+    IngestionResult,
     LinkageAction,
     LinkageDecision,
-    NormalizedRecord,
     OutputManifestEntry,
+    ParsedRecord,
     PipelineReport,
     ProcessingStatus,
     SanitizationResult,
 )
 from lumen_ex.errors import ProcessingError
+from lumen_ex.ingestion import StreamingIngestor
 from lumen_ex.stages import (
     Detector,
+    Ingestor,
     LeakScanner,
     Linker,
     Normalizer,
@@ -40,7 +44,7 @@ class Pipeline:
     def __init__(self, stages: PipelineStages) -> None:
         self._stages = stages
 
-    def process(self, record: NormalizedRecord) -> SanitizationResult:
+    def process(self, record: ParsedRecord) -> SanitizationResult:
         """Process one record; stage failures become a safe quarantine result."""
         try:
             normalized = self._stages.normalizer.normalize(record)
@@ -57,8 +61,8 @@ class Pipeline:
                 error_code=error.code,
             )
 
-    def run(self, records: Iterable[NormalizedRecord]) -> None:
-        """Process records in order, write only approved results, then finalize reporting."""
+    def run(self, records: Iterable[ParsedRecord]) -> None:
+        """Normalize and process records in order, then finalize reporting."""
         manifest: list[OutputManifestEntry] = []
         for record in records:
             result = self.process(record)
@@ -66,6 +70,12 @@ class Pipeline:
                 self._stages.output_writer.write(record.source, result)
             manifest.append(self._stages.reporter.record(record.source, result))
         self._stages.reporter.finalize(PipelineReport(files=tuple(manifest)))
+
+    def ingest_directory(
+        self, input_root: Path, ingestor: Ingestor | None = None
+    ) -> IngestionResult:
+        """Expose file-level ingestion outcomes before records enter later stages."""
+        return (ingestor or StreamingIngestor()).ingest(input_root)
 
 
 def abstain_from_linking() -> LinkageDecision:
