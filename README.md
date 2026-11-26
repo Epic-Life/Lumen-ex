@@ -32,7 +32,8 @@ without expanding those algorithms.
 
 Python 3.10 or later is required. Runtime dependencies are
 `indic-transliteration` for offline Indic-script transliteration and `phonenumbers`
-for offline phone validation and normalization, plus `ijson` for bounded JSON parsing.
+for offline phone validation and normalization, `ijson` for bounded JSON parsing, and
+`cryptography` for authenticated encryption and keyed indexes.
 
 ```powershell
 python -m venv .venv
@@ -80,6 +81,7 @@ lumen_ex/
   contracts/identity.py    compact identity projection contracts
   ingestion.py             bounded file discovery and record readers
   identity.py              identity extraction and field normalization
+  registry.py              encrypted per-run registry storage
   detection/indic_names.py Devanagari-aware candidate name normalization
   baseline.py              compatibility adapter for the shipped starter
 starter/                   official starter and policy (preserved)

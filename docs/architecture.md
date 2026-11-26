@@ -31,6 +31,7 @@ limitations; it is not a production-ready firewall.
 | Normalization | Normalize representation while retaining source locators and medical values. `Normalizer.normalize` accepts and returns a `NormalizedRecord`. |
 | PII detection | Produce counts and typed findings without deciding identity. `Detector.detect` returns `DetectionResult`. No detector is implemented in this milestone. |
 | Identity extraction and normalization | `lumen_ex.identity` projects parsed row/object values, FHIR R4 Patient resources, or labeled note fields into a compact `PatientIdentity`. Original values, normalized values, missing/invalid fields, and source locators are retained without copying full records. |
+| Identity registry storage | `lumen_ex.registry.EncryptedIdentityRegistry` stores encrypted evidence in one per-run SQLite database and keyed block indexes for candidate retrieval. It is shared across batches and removes its private database directory on close. |
 | Indic name normalization | `lumen_ex.detection.indic_names` normalizes supplied Latin/Devanagari name candidates with ITRANS transliteration, Unicode, punctuation, and a small honorific vocabulary. It preserves initials and token order; name equality is not proof of identity. |
 | Record linkage | Decide LINK, DO_NOT_LINK, or ABSTAIN separately from detection. `Linker.decide` returns `LinkageDecision`. No matcher is implemented. |
 | Privacy transformation | Transform a normalized record using detection and linkage outputs. `PrivacyTransformer.transform` returns `SanitizationResult`. No anonymization is implemented. |
@@ -51,6 +52,11 @@ collection keys and whole-document JSON values are materialized as one record. F
 validation remains an export responsibility. Free-text extraction is limited to
 explicit field labels; it is not a general name recognizer and does not perform record
 linking. The reader is not yet wired into the production CLI.
+
+The registry provides encrypted storage and exact keyed block lookup only. It does not
+make matching or merge decisions; confidence scoring and global reconciliation are
+separate later stages. Its database is per-run and must be closed to remove the
+encrypted database and SQLite sidecars.
 
 ## Operational constraints
 
