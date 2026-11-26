@@ -14,7 +14,13 @@ import phonenumbers
 from phonenumbers import NumberParseException, PhoneNumberFormat
 
 from lumen_ex.contracts.identity import IdentityValue, PatientIdentity
+from lumen_ex.contracts.models import (
+    InputFormat,
+    NormalizedRecord,
+    ParsedRecord,
+)
 from lumen_ex.detection.indic_names import normalize_name, transliterate_to_latin
+from lumen_ex.errors import ProcessingError
 
 
 _FIELD_NAMES = (
@@ -26,13 +32,14 @@ _FIELD_NAMES = (
     "address",
     "location",
     "hospital_identifier",
+    "insurance_identifier",
     "government_identifier",
 )
 _MAX_DEPTH = 24
 _MISSING_WORDS = {"", "n/a", "na", "nil", "none", "null", "unknown", "-", "--"}
 _WORD_SEPARATORS = re.compile(r"[^\w]+", re.UNICODE)
 _AGE = re.compile(
-    r"^\s*(\d{1,3})(?:\s*(?:years?|yrs?|y|वर्ष))?"
+    r"^\s*(\d{1,3})(?:\s*(?:years?|yrs?|y|saal|sal|varsh|वर्ष|साल))?"
     r"(?:\s*/\s*[mfx])?\s*$",
     re.IGNORECASE,
 )
@@ -56,15 +63,27 @@ _ALIASES: dict[str, frozenset[str]] = {
             "patientfullname",
             "personname",
             "naam",
+            "patientnaam",
+            "mareezkanam",
             "रोगीकानाम",
             "मरीजकानाम",
         }
     ),
     "date_of_birth": frozenset(
-        {"dob", "dateofbirth", "birthdate", "patientdob", "जन्मतिथि"}
+        {
+            "dob",
+            "dateofbirth",
+            "birthdate",
+            "patientdob",
+            "janmtithi",
+            "janamtithi",
+            "janmtarikh",
+            "janamtarikh",
+            "जन्मतिथि",
+        }
     ),
-    "age": frozenset({"age", "patientage", "उम्र", "आयु"}),
-    "gender": frozenset({"gender", "sex", "patientgender", "लिंग"}),
+    "age": frozenset({"age", "patientage", "umar", "umr", "उम्र", "आयु"}),
+    "gender": frozenset({"gender", "sex", "patientgender", "ling", "लिंग"}),
     "phone": frozenset(
         {
             "phone",
@@ -74,11 +93,16 @@ _ALIASES: dict[str, frozenset[str]] = {
             "contactnumber",
             "telephone",
             "telephonenumber",
+            "phoneno",
+            "mobileno",
+            "samparknumber",
             "फोन",
             "मोबाइल",
         }
     ),
-    "address": frozenset({"address", "patientaddress", "पता"}),
+    "address": frozenset(
+        {"address", "patientaddress", "pata", "gharkapata", "पता"}
+    ),
     "location": frozenset(
         {
             "city",
@@ -91,6 +115,10 @@ _ALIASES: dict[str, frozenset[str]] = {
             "zipcode",
             "pin",
             "pincode",
+            "gaon",
+            "jila",
+            "zilla",
+            "shehar",
             "गाँव",
             "जिला",
         }
@@ -105,7 +133,27 @@ _ALIASES: dict[str, frozenset[str]] = {
             "mrn",
             "medicalrecordnumber",
             "registrationnumber",
+            "mareezid",
             "रोगीआईडी",
+        }
+    ),
+    "insurance_identifier": frozenset(
+        {
+            "insuranceid",
+            "insuranceidentifier",
+            "insurancenumber",
+            "insurancepolicynumber",
+            "policyid",
+            "policynumber",
+            "memberid",
+            "membernumber",
+            "subscriberid",
+            "insurancememberid",
+            "policyholderid",
+            "bima",
+            "bimaid",
+            "bimanumber",
+            "बीमापहचान",
         }
     ),
     "government_identifier": frozenset(
@@ -146,23 +194,89 @@ _EXCLUDED_NAME_CONTEXTS = {
     "relative",
     "staff",
 }
+_NON_PATIENT_CONTEXTS = {
+    "author",
+    "doctor",
+    "facility",
+    "guardian",
+    "practitioner",
+    "relative",
+    "staff",
+}
 _NOTE_LABELS: dict[str, tuple[str, ...]] = {
     "name": (
         "patient name",
         "full name",
         r"name",
+        "naam",
+        "patient ka naam",
+        "mareez ka naam",
         "रोगी का नाम",
         "मरीज का नाम",
         "नाम",
     ),
-    "date_of_birth": ("date of birth", "birth date", "dob", "जन्म तिथि"),
-    "age": ("age", "उम्र", "आयु"),
-    "gender": ("gender", "sex", "लिंग"),
-    "phone": ("phone number", "phone", "mobile", "contact number", "फोन", "मोबाइल"),
-    "address": ("address", "पता"),
-    "location": ("village", "district", "tehsil", "city", "location", "गाँव", "जिला"),
-    "hospital_identifier": ("patient id", "uhid", "mrn", "hospital id"),
-    "government_identifier": ("aadhaar", "aadhar", "abha number", "abha", "pan", "आधार"),
+    "date_of_birth": (
+        "date of birth",
+        "birth date",
+        "dob",
+        "janm tithi",
+        "janam tithi",
+        "janm tarikh",
+        "janam tarikh",
+        "जन्म तिथि",
+    ),
+    "age": ("age", "umar", "umr", "उम्र", "आयु"),
+    "gender": ("gender", "sex", "ling", "लिंग"),
+    "phone": (
+        "phone number",
+        "phone no",
+        "phone",
+        "mobile number",
+        "mobile no",
+        "mobile",
+        "contact number",
+        "sampark number",
+        "फोन",
+        "मोबाइल",
+    ),
+    "address": ("address", "pata", "ghar ka pata", "पता"),
+    "location": (
+        "village",
+        "gaon",
+        "district",
+        "jila",
+        "zilla",
+        "tehsil",
+        "city",
+        "shehar",
+        "location",
+        "गाँव",
+        "जिला",
+    ),
+    "hospital_identifier": (
+        "patient id",
+        "mareez id",
+        "uhid",
+        "mrn",
+        "hospital id",
+        "registration number",
+    ),
+    "insurance_identifier": (
+        "insurance id",
+        "insurance number",
+        "policy id",
+        "policy number",
+        "bima id",
+        "bima number",
+    ),
+    "government_identifier": (
+        "aadhaar",
+        "aadhar",
+        "abha number",
+        "abha",
+        "pan",
+        "आधार",
+    ),
 }
 _NOTE_LABEL_ALTERNATIVES = sorted(
     (
@@ -218,7 +332,7 @@ def normalize_date(value: str | date | datetime) -> str | None:
     if not text:
         return None
     try:
-        return date.fromisoformat(text[:10]).isoformat()
+        return date.fromisoformat(text).isoformat()
     except ValueError:
         pass
 
@@ -257,12 +371,19 @@ def normalize_gender(value: str) -> str | None:
         "male": "male",
         "man": "male",
         "पुरुष": "male",
+        "purush": "male",
+        "mard": "male",
         "f": "female",
         "female": "female",
         "woman": "female",
         "महिला": "female",
+        "mahila": "female",
+        "स्त्री": "female",
+        "stri": "female",
+        "stree": "female",
         "other": "other",
         "non-binary": "other",
+        "non binary": "other",
         "nonbinary": "other",
         "o": "other",
         "unknown": "unknown",
@@ -304,6 +425,56 @@ def extract_identity(
         raise TypeError("identity_record_type_invalid")
 
     return _build_identity(candidates, source_file, record_locator)
+
+
+class PatientIdentityNormalizer:
+    """Attach identity projections while preserving parsed clinical source values."""
+
+    def normalize(self, record: ParsedRecord) -> NormalizedRecord:
+        values = record.values
+        fields = dict(values) if isinstance(values, Mapping) else {"value": values}
+        if record.source.detected_format is InputFormat.FHIR and isinstance(values, Mapping):
+            identities = extract_fhir_identities(
+                values,
+                record.source.relative_path,
+                record.locator,
+            )
+        elif record.source.detected_format is InputFormat.TEXT and isinstance(
+            values, Mapping
+        ) and isinstance(values.get("text"), str):
+            identities = (
+                extract_identity(
+                    values["text"],
+                    record.source.relative_path,
+                    record.locator,
+                ),
+            )
+        elif isinstance(values, Mapping):
+            identities = (
+                extract_identity(
+                    values,
+                    record.source.relative_path,
+                    record.locator,
+                ),
+            )
+        elif isinstance(values, str):
+            identities = (
+                extract_identity(
+                    values,
+                    record.source.relative_path,
+                    record.locator,
+                ),
+            )
+        else:
+            identities = ()
+
+        return NormalizedRecord(
+            source=record.source,
+            locator=record.locator,
+            fields=fields,
+            identities=identities,
+            structure=dict(record.structure),
+        )
 
 
 def extract_fhir_identities(
@@ -353,6 +524,7 @@ def _build_identity(
         "address": _normalize_address_value,
         "location": _normalize_location_value,
         "hospital_identifier": _normalize_identifier_value,
+        "insurance_identifier": _normalize_identifier_value,
         "government_identifier": _normalize_identifier_value,
     }
     values: dict[str, tuple[IdentityValue, ...]] = {}
@@ -396,15 +568,13 @@ def _extract_mapping_values(record: Mapping[str, object]) -> dict[str, list[tupl
     while stack:
         value, path, depth = stack.pop()
         if depth > _MAX_DEPTH:
-            continue
+            raise ProcessingError("identity_structure_depth_exceeded")
         if isinstance(value, Mapping):
             for key, child in value.items():
                 if not isinstance(key, str):
                     continue
                 child_path = path + (key,)
                 stack.append((child, child_path, depth + 1))
-                if _key_name(key) in _ALIASES["address"] and isinstance(child, str):
-                    _append(candidates, "address", child, ".".join(child_path))
             continue
         if isinstance(value, (list, tuple)):
             for index, child in enumerate(value):
@@ -452,7 +622,7 @@ def _collect_mapping_scalar(
 ) -> None:
     key = _key_name(path[-1])
     contexts = {_key_name(part) for part in path[:-1]}
-    if contexts & _EXCLUDED_NAME_CONTEXTS:
+    if contexts & _NON_PATIENT_CONTEXTS:
         return
 
     field_name = next(
@@ -460,14 +630,14 @@ def _collect_mapping_scalar(
         None,
     )
     if field_name == "name":
+        if contexts & _EXCLUDED_NAME_CONTEXTS:
+            return
         _append(candidates, "name", value, ".".join(path))
-    elif key in _NAME_PARTS and (
-        "name" in contexts
-        or not contexts
-        or contexts & {"patient", "person", "beneficiary", "subject"}
+    elif key in _NAME_PARTS and not contexts & _EXCLUDED_NAME_CONTEXTS and (
+        "name" in contexts or not contexts or contexts & {"patient", "person", "beneficiary", "subject"}
     ):
         _append(candidates, "name", value, ".".join(path))
-    elif "name" in contexts and key.isdecimal():
+    elif "name" in contexts and key.isdecimal() and not contexts & _EXCLUDED_NAME_CONTEXTS:
         _append(candidates, "name", value, ".".join(path))
     elif field_name in {
         "date_of_birth",
@@ -477,6 +647,7 @@ def _collect_mapping_scalar(
         "address",
         "location",
         "hospital_identifier",
+        "insurance_identifier",
         "government_identifier",
     }:
         if field_name == "address" and contexts & {"contact", "telecom"}:
@@ -511,15 +682,17 @@ def _extract_fhir_patient(patient: Mapping[str, object]) -> dict[str, list[tuple
         if _scalar_text(value) is None:
             continue
         system = str(identifier.get("system", "")).casefold()
-        coding = identifier.get("type")
-        type_text = ""
-        if isinstance(coding, Mapping):
-            type_text = str(coding.get("text", "")).casefold()
-        target = (
-            "government_identifier"
-            if any(word in system + " " + type_text for word in ("aadhaar", "aadhar", "abha", "pan", "national", "government"))
-            else "hospital_identifier"
-        )
+        type_text = _fhir_identifier_type(identifier.get("type"))
+        identifier_context = f"{system} {type_text}"
+        if any(word in identifier_context for word in ("insurance", "policy", "coverage")):
+            target = "insurance_identifier"
+        elif any(
+            word in identifier_context
+            for word in ("aadhaar", "aadhar", "abha", "pan", "national", "government")
+        ):
+            target = "government_identifier"
+        else:
+            target = "hospital_identifier"
         _append(candidates, target, value, f"identifier/{identifier_index}/value")
 
     for index, telecom in enumerate(_as_mappings(patient.get("telecom"))):
@@ -605,6 +778,25 @@ def _append_if_scalar(
         _append(candidates, field_name, value, source_key)
 
 
+def _fhir_identifier_type(value: object) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    parts: list[str] = []
+    text = value.get("text")
+    if isinstance(text, str):
+        parts.append(text)
+    coding = value.get("coding")
+    if isinstance(coding, list):
+        for item in coding:
+            if not isinstance(item, Mapping):
+                continue
+            for key in ("code", "display", "system"):
+                item_value = item.get(key)
+                if isinstance(item_value, str):
+                    parts.append(item_value)
+    return " ".join(parts).casefold()
+
+
 def _append(
     candidates: dict[str, list[tuple[object, str]]],
     field_name: str,
@@ -654,6 +846,7 @@ def _date_components(value: str, date_format: str) -> tuple[int, int]:
 
 
 __all__ = [
+    "PatientIdentityNormalizer",
     "extract_fhir_identities",
     "extract_identity",
     "normalize_age",

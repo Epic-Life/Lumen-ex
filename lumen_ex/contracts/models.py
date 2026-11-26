@@ -6,6 +6,7 @@ import hashlib
 from collections.abc import Iterator
 import re
 
+from lumen_ex.contracts.identity import PatientIdentity
 from lumen_ex.errors import SAFE_ERROR_CODES
 
 
@@ -163,8 +164,10 @@ class IngestionResult:
 @dataclass(frozen=True)
 class NormalizedRecord:
     source: InputFileMetadata
-    locator: str
-    fields: dict[str, object] = field(repr=False)
+    locator: str = field(repr=False)
+    fields: dict[object, object] = field(repr=False)
+    identities: tuple[PatientIdentity, ...] = field(default=(), repr=False)
+    structure: dict[str, object] = field(default_factory=dict, repr=False)
 
 
 @dataclass(frozen=True)

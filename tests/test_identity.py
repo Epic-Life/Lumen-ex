@@ -4,7 +4,9 @@ import unicodedata
 import unittest
 
 from lumen_ex.contracts.identity import PatientIdentity
+from lumen_ex.contracts.models import InputFileMetadata, InputFormat, ParsedRecord
 from lumen_ex.identity import (
+    PatientIdentityNormalizer,
     extract_fhir_identities,
     extract_identity,
     normalize_age,
@@ -15,6 +17,7 @@ from lumen_ex.identity import (
     normalize_phone,
 )
 from lumen_ex.detection.indic_names import names_match, normalize_name
+from lumen_ex.errors import ProcessingError
 
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "identity_examples.json"
@@ -59,9 +62,13 @@ class ScalarNormalizationTests(unittest.TestCase):
         self.assertEqual(normalize_date("04/13/1982"), "1982-04-13")
         self.assertIsNone(normalize_date("04/05/1982"))
         self.assertIsNone(normalize_date("31/02/1982"))
+        self.assertIsNone(normalize_date("1982-04-13garbage"))
+        self.assertIsNone(normalize_date("1982-04-13T23:59:00Z"))
 
     def test_normalizes_age_gender_identifiers_and_locations(self) -> None:
         self.assertEqual(normalize_age("48 years"), "48")
+        self.assertEqual(normalize_age("48 saal"), "48")
+        self.assertEqual(normalize_age("४८ वर्ष"), "48")
         self.assertIsNone(normalize_age("148"))
         self.assertEqual(normalize_gender("F"), "female")
         self.assertIsNone(normalize_gender("not specified"))
@@ -120,6 +127,62 @@ class IdentityExtractionTests(unittest.TestCase):
         self.assertIn("Rae Bareli", {value.original for value in identity.location})
         self.assertEqual(identity.government_identifier[0].normalized, "123456789012")
 
+    def test_extracts_patient_contact_phone_but_not_doctor_phone(self) -> None:
+        identity = extract_identity(
+            {
+                "patient": {"contact": {"mobile": "9876543210"}},
+                "doctor": {"phone": "9123456789"},
+            },
+            "registration/patient.json",
+        )
+
+        self.assertEqual(len(identity.phone), 1)
+        self.assertEqual(identity.phone[0].normalized, "+919876543210")
+        self.assertEqual(identity.phone[0].source_key, "patient.contact.mobile")
+
+    def test_extracts_hinglish_labels_and_insurance_identifier(self) -> None:
+        identity = extract_identity(
+            "Naam: Asha Sharma\n"
+            "Umar: 48 saal\n"
+            "Pata: Rae Bareli\n"
+            "Mobile No: 98765 43210\n"
+            "Bima Number: POLICY-TEST-1",
+            "notes/hinglish.txt",
+        )
+
+        self.assertEqual(identity.name[0].normalized, "asha sharma")
+        self.assertEqual(identity.age[0].normalized, "48")
+        self.assertEqual(identity.address[0].normalized, "rae bareli")
+        self.assertEqual(identity.phone[0].normalized, "+919876543210")
+        self.assertEqual(identity.insurance_identifier[0].normalized, "POLICYTEST1")
+
+    def test_extracts_insurance_identifier_from_structured_fields(self) -> None:
+        identity = extract_identity(
+            {"patient": {"insurance": {"policy_number": "POLICY-TEST-2"}}},
+            "registration/patient.json",
+        )
+
+        self.assertEqual(
+            identity.insurance_identifier[0].normalized, "POLICYTEST2"
+        )
+
+    def test_rejects_excessively_nested_identity_mappings_instead_of_skipping(self) -> None:
+        record: dict[str, object] = {}
+        current = record
+        for _ in range(26):
+            child: dict[str, object] = {}
+            current["nested"] = child
+            current = child
+        current["patient_id"] = "PATIENT-TEST-1"
+
+        with self.assertRaises(ProcessingError) as too_deep:
+            extract_identity(record, "registration/deep.json")
+
+        self.assertEqual(
+            too_deep.exception.code, "identity_structure_depth_exceeded"
+        )
+        self.assertNotIn("PATIENT-TEST-1", str(too_deep.exception))
+
     def test_extracts_fhir_patient_and_bundle_with_record_locators(self) -> None:
         bundle = {
             "resourceType": "Bundle",
@@ -158,6 +221,28 @@ class IdentityExtractionTests(unittest.TestCase):
         self.assertTrue(patient.address)
         self.assertTrue(patient.location)
 
+    def test_classifies_fhir_insurance_identifiers(self) -> None:
+        identity = extract_identity(
+            {
+                "resourceType": "Patient",
+                "identifier": [
+                    {
+                        "type": {
+                            "coding": [
+                                {"code": "INS", "display": "Insurance policy number"}
+                            ]
+                        },
+                        "value": "POLICY-TEST-8",
+                    }
+                ],
+            },
+            "fhir/patient.json",
+        )
+
+        self.assertEqual(
+            identity.insurance_identifier[0].normalized, "POLICYTEST8"
+        )
+
     def test_extracts_only_explicitly_labeled_note_fields(self) -> None:
         identity = extract_identity(
             "नाम: मोहम्मद शाहिद\nउम्र: 48 वर्ष\nGender: M\n"
@@ -171,6 +256,60 @@ class IdentityExtractionTests(unittest.TestCase):
         self.assertEqual(identity.phone[0].normalized, "+919876543210")
         self.assertEqual(identity.hospital_identifier[0].normalized, "JJHTEST7")
         self.assertEqual(len(identity.name), 1)
+
+    def test_normalizer_attaches_identity_without_mutating_source_fields(self) -> None:
+        source_fields = {
+            "text": "Naam: Asha Sharma\nUmar: 48 saal",
+            "diagnosis": "synthetic diagnosis",
+        }
+        source = InputFileMetadata(
+            relative_path="notes/synthetic.txt",
+            sha256="a" * 64,
+            size_bytes=64,
+            detected_format=InputFormat.TEXT,
+            encoding="utf-8",
+        )
+        parsed = ParsedRecord(source, "doc", source_fields)
+
+        normalized = PatientIdentityNormalizer().normalize(parsed)
+
+        self.assertEqual(normalized.fields, source_fields)
+        self.assertEqual(normalized.identities[0].name[0].normalized, "asha sharma")
+        self.assertEqual(normalized.identities[0].age[0].normalized, "48")
+        self.assertNotIn("Asha Sharma", repr(normalized))
+        self.assertNotIn("synthetic diagnosis", repr(normalized))
+
+    def test_normalizer_extracts_all_patients_from_a_complete_bundle(self) -> None:
+        bundle = {
+            "resourceType": "Bundle",
+            "type": "collection",
+            "entry": [
+                {"resource": {"resourceType": "Observation", "id": "obs"}},
+                {
+                    "resource": {
+                        "resourceType": "Patient",
+                        "name": [{"text": "Asha Sharma"}],
+                    }
+                },
+            ],
+        }
+        source = InputFileMetadata(
+            relative_path="fhir/bundle.json",
+            sha256="b" * 64,
+            size_bytes=128,
+            detected_format=InputFormat.FHIR,
+            encoding="utf-8",
+        )
+
+        normalized = PatientIdentityNormalizer().normalize(
+            ParsedRecord(source, "doc", bundle)
+        )
+
+        self.assertEqual(len(normalized.identities), 1)
+        self.assertEqual(
+            normalized.identities[0].record_locator, "/entry/1/resource"
+        )
+        self.assertEqual(normalized.fields, bundle)
 
     def test_reports_missing_and_malformed_values_without_dropping_originals(self) -> None:
         identity = extract_identity(

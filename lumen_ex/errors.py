@@ -20,6 +20,7 @@ SAFE_ERROR_CODES = frozenset(
         "invalid_fhir",
         "json_depth_exceeded",
         "source_changed",
+        "identity_structure_depth_exceeded",
         "empty_file",
         "CSVError",
         "registry_secret_missing",

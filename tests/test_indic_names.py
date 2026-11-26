@@ -23,9 +23,18 @@ class IndicNameTests(unittest.TestCase):
         self.assertTrue(names_match("मोहम्मद शाहिद", "Mohammad Shahid"))
         self.assertTrue(names_match("मुहम्मद शाहिद", "Muhammad Shahid"))
 
-    def test_does_not_infer_name_specific_abbreviations_or_spellings(self) -> None:
-        self.assertFalse(names_match("मोहम्मद शाहिद", "Mohd. Shahid"))
-        self.assertFalse(names_match("मोहम्मद शाहिद", "Mohammed Shahid"))
+    def test_normalizes_common_mohammad_spelling_variants(self) -> None:
+        variants = (
+            "मोहम्मद शाहिद",
+            "Mohammad Shahid",
+            "Mohammed Shahid",
+            "Muhammad Shahid",
+            "Mohd. Shahid",
+            "Md. Shahid",
+        )
+        for variant in variants[1:]:
+            with self.subTest(variant=variant):
+                self.assertTrue(names_match(variants[0], variant))
 
     def test_preserves_long_final_vowels_in_devanagari_names(self) -> None:
         self.assertTrue(names_match("अमीना", "Amina"))

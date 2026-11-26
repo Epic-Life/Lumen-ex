@@ -13,6 +13,13 @@ from indic_transliteration import sanscript
 _DEVANAGARI = re.compile(r"[\u0900-\u097f]")
 _DEVANAGARI_RUN = re.compile(r"([\u0900-\u097f]+)")
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
+_FIRST_NAME_VARIANTS = {
+    "mohammad": "mohammad",
+    "mohammed": "mohammad",
+    "muhammad": "mohammad",
+    "mohd": "mohammad",
+    "md": "mohammad",
+}
 
 
 def contains_devanagari(text: str) -> bool:
@@ -53,6 +60,8 @@ def normalize_name(name: str) -> str:
 
     while tokens and tokens[0] in _PREFIX_HONORIFICS:
         tokens.pop(0)
+    if tokens:
+        tokens[0] = _FIRST_NAME_VARIANTS.get(tokens[0], tokens[0])
     if len(tokens) > 1 and tokens[-1] in _SUFFIX_HONORIFICS:
         tokens.pop()
     return " ".join(tokens)

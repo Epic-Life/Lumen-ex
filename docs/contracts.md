@@ -17,7 +17,8 @@ without changing the evaluator interface.
 - `IngestionResult`: ordered file outcomes and a lazy iterator over records from files
   that passed prevalidation. Callers must inspect file outcomes rather than assuming
   every discovered file was ingested.
-- `NormalizedRecord`: source metadata, a source locator, and parsed fields. Field values
+- `NormalizedRecord`: source metadata, a source locator, parsed fields, optional identity
+  projections, and optional source structure. Field values, locators, and projections
   are excluded from repr to reduce accidental logging exposure.
 - `DetectionResult`: non-negative detection totals and optional entity-type counts.
 - `LinkageAction` / `LinkageDecision`: LINK requires a patient reference; DO_NOT_LINK and
@@ -39,15 +40,17 @@ programming errors are not silently presented as successful processing.
 `PatientIdentity` in `lumen_ex.contracts.identity` contains only identity attributes
 and their `IdentityValue(original, normalized, source_key)` entries. Supported
 attributes are name, date of birth, age, gender, phone, address, location,
-hospital-specific identifier, and government/health identifier. It also records the
-source file and record locator, missing and malformed fields, and normalization
-metadata. Source values and locators are excluded from object representations to reduce
-accidental logging exposure. The projection deliberately does not retain the complete
-medical record.
+hospital-specific identifier, government/health identifier, and insurance identifier.
+It also records the source file and record locator, missing and malformed fields, and
+normalization metadata. Source values and locators are excluded from object
+representations to reduce accidental logging exposure. The projection deliberately does
+not retain the complete medical record.
 
 `lumen_ex.identity.extract_identity` handles one parsed mapping or a labeled note;
 `extract_fhir_identities` returns identities for Patient resources in a FHIR R4
-resource or Bundle. The helpers do not decode files or guess unlabeled names.
+resource or Bundle. `PatientIdentityNormalizer` attaches those projections to
+`NormalizedRecord` while retaining the parsed source fields and structure. These
+helpers do not decode files or guess unlabeled names.
 
 ## Stage interfaces
 
@@ -72,8 +75,8 @@ The governing format is the starter kit's `docs/SPEC.md`, not these internal mod
   `file`, `loc`, and `patient` keys. No new required fields are introduced.
 - Output paths remain relative to the output root; hashes identify inputs without
   exposing source filenames in the report.
-- `PatientIdentity` is an internal extraction contract only. It does not change
-  `NormalizedRecord`, `records.jsonl`, the report schema, or any pseudonym behavior.
+- `PatientIdentity` and its `NormalizedRecord` projections are internal contracts only.
+  They do not change `records.jsonl`, the report schema, or any pseudonym behavior.
 
 The existing starter is still responsible for actual baseline serialization in this
 milestone. The new report serializer is covered as a contract helper and does not alter

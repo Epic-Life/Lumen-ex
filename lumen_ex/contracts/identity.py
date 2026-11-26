@@ -40,6 +40,7 @@ class PatientIdentity:
     address: tuple[IdentityValue, ...] = ()
     location: tuple[IdentityValue, ...] = ()
     hospital_identifier: tuple[IdentityValue, ...] = ()
+    insurance_identifier: tuple[IdentityValue, ...] = ()
     government_identifier: tuple[IdentityValue, ...] = ()
     missing_fields: frozenset[str] = frozenset()
     invalid_fields: frozenset[str] = frozenset()
